@@ -1,6 +1,10 @@
 from fraudetect.dataset import load_data, data_loader, train_test_split
 from fraudetect.features import perform_feature_engineering, transform_data
-from fraudetect.config import COLUMNS_TO_DROP, COLUMNS_TO_ONE_HOT_ENCODE, COLUMNS_TO_SCALE
+from fraudetect.config import (
+    COLUMNS_TO_DROP,
+    COLUMNS_TO_ONE_HOT_ENCODE,
+    COLUMNS_TO_SCALE,
+)
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 import numpy as np
 from fraudetect import import_from_path, sample_cfg
@@ -9,30 +13,38 @@ from collections import OrderedDict
 
 df_data = load_data(r"D:\fraud-detection-galsen\data\training.csv")
 
-onehot_encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore', drop=None, dtype=np.float64)
+onehot_encoder = OneHotEncoder(
+    sparse_output=False, handle_unknown="ignore", drop=None, dtype=np.float64
+)
 scaler = StandardScaler()
 
-X_train, y_train = perform_feature_engineering(transactions_df=df_data, 
-                                           columns_to_drop=COLUMNS_TO_DROP,
-                                           columns_to_onehot_encode=COLUMNS_TO_ONE_HOT_ENCODE,
-                                           columns_to_scale=COLUMNS_TO_SCALE,
-                                           onehot_encoder=onehot_encoder,
-                                           scaler=scaler,
-                                           mode='train',
-                                           windows_size_in_days=[1,7,30]
-                                           )
+X_train, y_train = perform_feature_engineering(
+    transactions_df=df_data,
+    columns_to_drop=COLUMNS_TO_DROP,
+    columns_to_onehot_encode=COLUMNS_TO_ONE_HOT_ENCODE,
+    columns_to_scale=COLUMNS_TO_SCALE,
+    onehot_encoder=onehot_encoder,
+    scaler=scaler,
+    mode="train",
+    windows_size_in_days=[1, 7, 30],
+)
 
-#%% load configs
-configs = import_from_path('hyp_search_conf',
-                           r'D:\fraud-detection-galsen\tools\hyp_search_conf.py')
+# %% load configs
+configs = import_from_path(
+    "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
+)
 
-#%% Outliers detectors
-from fraudetect.features import fit_outliers_detectors, concat_outliers_probs_pyod, load_transforms_pyod
+# %% Outliers detectors
+from fraudetect.features import (
+    fit_outliers_detectors,
+    concat_outliers_probs_pyod,
+    load_transforms_pyod,
+)
 from fraudetect.detectors import get_detector, instantiate_detector
 
 model_list = list()
 # names = configs.outliers_detectors.keys()
-names = ['cblof','iforest']
+names = ["cblof", "iforest"]
 
 outliers_det_configs = []
 for name in sorted(names):
@@ -40,35 +52,38 @@ for name in sorted(names):
     cfg = sample_cfg(cfg)
     detector = instantiate_detector(detector, cfg)
     model_list.append(detector)
-    
-    cfg['detector'] = configs.outliers_detectors[name]['detector']
-    outliers_det_configs.append((name,cfg))
+
+    cfg["detector"] = configs.outliers_detectors[name]["detector"]
+    outliers_det_configs.append((name, cfg))
 
 model_list = fit_outliers_detectors(model_list, X_train)
-X_t = concat_outliers_probs_pyod(fitted_detector_list=model_list, 
-                                 X=X_train,
-                                 method='linear',
-                                 add_confidence=True,
-                                 )
+X_t = concat_outliers_probs_pyod(
+    fitted_detector_list=model_list,
+    X=X_train,
+    method="linear",
+    add_confidence=True,
+)
 
 outliers_det_configs = OrderedDict(outliers_det_configs)
-transform = load_transforms_pyod(X_train=X_train,
-                                 outliers_det_configs=outliers_det_configs,
-                                 method='linear',
-                                 add_confidence=False,
-                                 ) 
+transform = load_transforms_pyod(
+    X_train=X_train,
+    outliers_det_configs=outliers_det_configs,
+    method="linear",
+    add_confidence=False,
+)
 
-#%%  Undersampling
-from imblearn.under_sampling import (TomekLinks, 
-                                     RandomUnderSampler, 
-                                     AllKNN, 
-                                     NearMiss, 
-                                     EditedNearestNeighbours,
-                                     CondensedNearestNeighbour,
-                                     OneSidedSelection,
-                                     ClusterCentroids,
-                                     NeighbourhoodCleaningRule
-                                     )
+# %%  Undersampling
+from imblearn.under_sampling import (
+    TomekLinks,
+    RandomUnderSampler,
+    AllKNN,
+    NearMiss,
+    EditedNearestNeighbours,
+    CondensedNearestNeighbour,
+    OneSidedSelection,
+    ClusterCentroids,
+    NeighbourhoodCleaningRule,
+)
 from sklearn.cluster import MiniBatchKMeans
 
 
@@ -105,13 +120,9 @@ from sklearn.cluster import MiniBatchKMeans
 # X_ncr,  y_ncr = under_sampler_ncr.fit_resample(X_train, y_train)
 
 
-#%% Oversampling
+# %% Oversampling
 
-from imblearn.over_sampling import (SMOTE,
-                                    ADASYN,
-                                    BorderlineSMOTE,
-                                    KMeansSMOTE,
-                                    SVMSMOTE)
+from imblearn.over_sampling import SMOTE, ADASYN, BorderlineSMOTE, KMeansSMOTE, SVMSMOTE
 
 
 # frac = float(2*y_train.sum()/(1-y_train).sum())
@@ -133,38 +144,27 @@ from imblearn.over_sampling import (SMOTE,
 # print(y_sste.sum()/y_train.sum())
 
 
-
-
-
-
-#%% Test of samplers
+# %% Test of samplers
 from fraudetect.sampling import sample_cfg, get_sampler, data_resampling
 
 
-sampler_names=['nearmiss',] #'nearmiss','SMOTE']
+sampler_names = [
+    "nearmiss",
+]  #'nearmiss','SMOTE']
 
 
 def get_samplers_cfgs(sampler_names, configs):
-    
     sampler_cfgs = list()
-    
+
     for name in sampler_names:
         cfg = configs.sampler[name]
-        cfg = sample_cfg(cfg) # for test purposes
-        sampler_cfgs.append({name:cfg})
+        cfg = sample_cfg(cfg)  # for test purposes
+        sampler_cfgs.append({name: cfg})
     return sampler_cfgs
+
 
 sampler_cfgs = get_samplers_cfgs(sampler_names, configs)
 
-X_t, y_t = data_resampling(X=X_train,
-                            y=y_train,
-                            sampler_names=sampler_names,
-                            sampler_cfgs=sampler_cfgs)
-
-
-
-
-
-
-
-
+X_t, y_t = data_resampling(
+    X=X_train, y=y_train, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
+)

@@ -1,7 +1,6 @@
+def import_from_path(module_name: str, file_path: str):
+    """https://docs.python.org/3/library/importlib.html#importing-programmatically
 
-def import_from_path(module_name:str, file_path:str):
-    """ https://docs.python.org/3/library/importlib.html#importing-programmatically
-    
 
     Parameters
     ----------
@@ -24,16 +23,17 @@ def import_from_path(module_name:str, file_path:str):
     spec.loader.exec_module(module)
     return module
 
-def sample_cfg(model_cfg:dict) -> dict:
+
+def sample_cfg(model_cfg: dict) -> dict:
     """
     Sample a configuration from the given configuration dictionary.
     """
     from collections.abc import Iterable
     import random
-    
+
     sampled_cfg = {}
     for key, value in model_cfg.items():
-        if isinstance(value, Iterable) :
+        if isinstance(value, Iterable):
             sampled_cfg[key] = random.choice(value)
         else:
             sampled_cfg[key] = value
