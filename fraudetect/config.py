@@ -17,9 +17,11 @@ class Arguments:
     windows_size_in_days=(1,7,30)
     sampler_names = None
     sampler_cfgs = None
+    outliers_det_configs = None
     pyod_predict_proba_method='unify' # unify or linear
     model_names = ('sgdClassifier', 'xgboost', 'randomForest','histGradientBoosting')
     pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
+    disable_pyod_outliers=False
     n_iter=20
     cv_gap=1051*5
     cv_method='random'

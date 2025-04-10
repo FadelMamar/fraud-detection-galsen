@@ -1,6 +1,7 @@
 # import numpy as np
 from imblearn.pipeline import Pipeline
 import random
+import numpy as np
 
 def get_sampler(name:str, config:dict) -> dict:
     """
@@ -40,3 +41,19 @@ def build_samplers_pipeline(sampler_list:list)->Pipeline:
     
     return Pipeline(list_)
 
+def data_resampling(X:np.ndarray,
+                    y:np.ndarray,
+                    sampler_names:list[str],
+                    sampler_cfgs:list[dict])->tuple[np.ndarray,np.ndarray]:
+
+    sampler_list = list()
+
+    for sampler_name,cfg in zip(sampler_names, sampler_cfgs):
+        if sampler_name is not None:
+            sampler, cfg = get_sampler(name=sampler_name, config=cfg)
+            sampler = sampler(**cfg)
+            sampler_list.append(sampler)
+    
+    pipe = build_samplers_pipeline(sampler_list=sampler_list)
+
+    return pipe.fit_resample(X=X,y=y)

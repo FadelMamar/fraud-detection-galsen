@@ -138,9 +138,7 @@ from imblearn.over_sampling import (SMOTE,
 
 
 #%% Test of samplers
-from fraudetect.features import data_resampling
-from fraudetect.sampling import sample_cfg, get_sampler
-# from hyp_search_conf import under_sampler, over_sampler, combined_sampler, outliers_detectors
+from fraudetect.sampling import sample_cfg, get_sampler, data_resampling
 
 
 sampler_names=['nearmiss',] #'nearmiss','SMOTE']
@@ -151,16 +149,7 @@ def get_samplers_cfgs(sampler_names, configs):
     sampler_cfgs = list()
     
     for name in sampler_names:
-        
-        if name in configs.under_sampler.keys():
-            cfg = configs.under_sampler[name]
-            
-        elif name in configs.over_sampler.keys():
-            cfg = configs.over_sampler[name]
-            
-        elif name in configs.combined_sampler.keys():
-            cfg = configs.combined_sampler[name]
-        
+        cfg = configs.sampler[name]
         cfg = sample_cfg(cfg) # for test purposes
         sampler_cfgs.append({name:cfg})
     return sampler_cfgs

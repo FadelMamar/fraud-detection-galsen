@@ -7,6 +7,8 @@ import pandas as pd
 
 def load_data(data_path:str="../data/training.csv") -> pd.DataFrame:
     
+    print("step: load data")
+    
     # load data
     df_data = pd.read_csv(data_path)
     df_data['TransactionStartTime'] = pd.to_datetime(df_data['TransactionStartTime'],dayfirst=True)
@@ -33,6 +35,8 @@ def train_test_split(df_data:pd.DataFrame,
                     random_state:int=41,
                     n_folds:int=5,
                     sampling_ratio:float=1.0)->tuple:
+    
+    print(f'step: train-test-split using method={method}')
     
     df_data.sort_values('TX_DATETIME',inplace=True,ascending=True)
     start_date_training = df_data['TX_DATETIME'].iloc[-1] # last date of the dataset

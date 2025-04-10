@@ -147,31 +147,31 @@ outliers_detectors['mo_gaal'] = dict(detector=MO_GAAL,
 outliers_detectors = OrderedDict([(k,outliers_detectors[k]) for k in sorted(outliers_detectors.keys(),reverse=False)])
 
 #%% samplers config
-under_sampler = dict()
+samplers = dict()
 
 fracs = (np.arange(1,10)*4e-3).tolist()
 
-under_sampler['nearmiss'] = dict(sampling_strategy=fracs,
+# under sampling
+samplers['nearmiss'] = dict(sampling_strategy=fracs,
                                  n_neighbors=[3,5,7,9],
                                  version=[1],
                                  n_jobs=[8],
                                  sampler=NearMiss
                                  )
-
-over_sampler = dict()
-over_sampler['SMOTE'] = dict(sampling_strategy=fracs,
+# oversampling
+samplers['SMOTE'] = dict(sampling_strategy=fracs,
                              random_state=[41],
                              k_neighbors=[3,5,7,9],
                              sampler=SMOTE
                              )
 
-over_sampler['adasyn'] = dict(sampling_strategy=fracs,
+samplers['adasyn'] = dict(sampling_strategy=fracs,
                              random_state=[41],
                              n_neighbors=[3,5,7,9],
                              sampler=ADASYN
                              )
 
-over_sampler['borderlineSMOTE'] = dict(sampling_strategy=fracs,
+samplers['borderlineSMOTE'] = dict(sampling_strategy=fracs,
                              random_state=[41],
                              m_neighbors=[3,5,7,9],
                              k_neighbors=[5,7,10,15,20],
@@ -179,7 +179,7 @@ over_sampler['borderlineSMOTE'] = dict(sampling_strategy=fracs,
                              sampler=BorderlineSMOTE
                              )
 
-over_sampler['svmSMOTE'] = dict(sampling_strategy=fracs,
+samplers['svmSMOTE'] = dict(sampling_strategy=fracs,
                              random_state=[41],
                              m_neighbors=[5,7,10,15,20],
                              out_step=[0.1,0.2,0.5,0.7],
@@ -188,20 +188,23 @@ over_sampler['svmSMOTE'] = dict(sampling_strategy=fracs,
                              sampler=SVMSMOTE
                              )
 
-combined_sampler = dict()
-combined_sampler['smoteENN'] = dict(sampling_strategy=fracs,
+# combined sampler
+samplers['smoteENN'] = dict(sampling_strategy=fracs,
                              random_state=[41],
                              enn=EditedNearestNeighbours(sampling_strategy='majority',n_neighbors=5,kind_sel='all',n_jobs=8),
                              n_jobs=[8],
                              sampler=SMOTEENN
                              )
 
-combined_sampler['smoteTOMEK'] = dict(sampling_strategy=fracs,
+samplers['smoteTOMEK'] = dict(sampling_strategy=fracs,
                              random_state=[41],
                              n_job=[8],
                              sampler=SMOTETomek
                              )
 
+undersamplers = ['nearmiss', None]
+oversamplers = ['SMOTE','adasyn','borderlineSMOTE','svmSMOTE', None]
+combinedsamplers = ['smoteENN','smoteTOMEK',None,None]
 
 
 

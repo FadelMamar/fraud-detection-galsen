@@ -195,22 +195,7 @@ def transform_data(train_df:pd.DataFrame, val_df:pd.DataFrame|None,
     
     return (X_train, y_train, X_val, y_val), (onehot_encoder, scaler)
 
-def data_resampling(X:np.ndarray,
-                    y:np.ndarray,
-                    sampler_names:list[str],
-                    sampler_cfgs:list[dict])->tuple[np.ndarray,np.ndarray]:
 
-    sampler_list = list()
-
-    for sampler_name,cfg in zip(sampler_names, sampler_cfgs):
-        if sampler_name is not None:
-            sampler, cfg = get_sampler(name=sampler_name, config=cfg)
-            sampler = sampler(**cfg)
-            sampler_list.append(sampler)
-    
-    pipe = build_samplers_pipeline(sampler_list=sampler_list)
-
-    return pipe.fit_resample(X=X,y=y)
 
 def fit_outliers_detectors(detector_list:list[BaseDetector], X_train:np.ndarray)->list[BaseDetector]:
     

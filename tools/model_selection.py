@@ -10,13 +10,23 @@ from fraudetect.dataset import data_loader
 from sklearn.model_selection import TimeSeriesSplit
 from fraudetect.config import COLUMNS_TO_DROP, COLUMNS_TO_ONE_HOT_ENCODE, COLUMNS_TO_SCALE, Arguments
 import numpy as np
-from fraudetect.features import data_resampling, load_transforms_pyod
+from fraudetect.features import load_transforms_pyod
+from fraudetect.sampling import data_resampling
 from fraudetect import import_from_path, sample_cfg
 from collections import OrderedDict
 import joblib
 from functools import partial
+import optuna
+from optuna.samplers import TPESampler
+from collections.abc import Iterable
 
-
+try:
+    HYP_CONFIGS = import_from_path('hyp_search_conf',
+                               r'D:\fraud-detection-galsen\tools\hyp_search_conf.py')
+except:
+    HYP_CONFIGS = import_from_path('hyp_search_conf',
+                               r'D:\fraud-detection-galsen\tools\hyp_search_conf.py')
+    
 def prepare_data(data_path:str, 
                  kwargs_tranform_data:dict,
                  delta_train=40, 
@@ -85,7 +95,8 @@ def tune_models_hyp(X_train:np.ndarray,
             best_results[model_name] = [search_engine]
             
             score = search_engine.best_score_
-            print(f"mean {scoring} score: {score}")
+            print(f"mean {scoring} score for best_estimator: {score:.4f}")
+            print("best params: ",search_engine.best_params_ )
             
         except Exception as e:
             print(e)
@@ -96,7 +107,7 @@ def tune_models_hyp(X_train:np.ndarray,
 def load_models_cfg(names:list[str]):
     return {name:HYP_CONFIGS.models[name] for name in names}
 
-def run(args:Arguments, outliers_det_configs:dict=None,save_path:str=None,verbose=1):
+def run(args:Arguments, save_path:str=None,verbose=1):
     
     # args
     data_path = args.data_path
@@ -137,9 +148,9 @@ def run(args:Arguments, outliers_det_configs:dict=None,save_path:str=None,verbos
                                      )
     
     # load pyod transform and apply it to X_train
-    if outliers_det_configs is not None:
+    if args.outliers_det_configs is not None:
         transform = load_transforms_pyod(X_train=X_train,
-                                         outliers_det_configs=outliers_det_configs,
+                                         outliers_det_configs=args.outliers_det_configs,
                                          method=pyod_predict_proba_method
                                          )    
         X_train = transform(X=X_train)
@@ -162,66 +173,129 @@ def run(args:Arguments, outliers_det_configs:dict=None,save_path:str=None,verbos
         
     return best_results
     
-# sample cfg for resamplers
+
+#%% Run
+
+# helpers for debugging
 def get_samplers_cfgs(sampler_names, configs):
     
     sampler_cfgs = list()
     
     for name in sampler_names:
-        
-        if name in configs.under_sampler.keys():
-            cfg = configs.under_sampler[name]
-            
-        elif name in configs.over_sampler.keys():
-            cfg = configs.over_sampler[name]
-            
-        elif name in configs.combined_sampler.keys():
-            cfg = configs.combined_sampler[name]
-        
-        cfg = sample_cfg(cfg) # for test purposes
+        cfg = configs.samplers[name]
+        cfg = sample_cfg(cfg) # random sampling
         sampler_cfgs.append({name:cfg})
         
     return sampler_cfgs
-#%% Run
-if __name__ == "__main__":
-    
-    
-    try:
-        HYP_CONFIGS = import_from_path('hyp_search_conf',
-                                   r'D:\fraud-detection-galsen\tools\hyp_search_conf.py')
-    except:
-        HYP_CONFIGS = import_from_path('hyp_search_conf',
-                                   r'D:\fraud-detection-galsen\tools\hyp_search_conf.py')
-    
-    args = Arguments()
-    args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
-    args.model_names = ('logisticReg', 'xgboost', 'randomForest','histGradientBoosting')
-    args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
-    args.n_iter = 100
-    disable_pyod_outliers = True
+
+def get_pyod_cfgs(names,configs):
     
     # sample cfg randomly for debugging
     outliers_det_configs = []
     names = args.pyod_detectors
     for name in sorted(names):
-        cfg = HYP_CONFIGS.outliers_detectors[name]
+        cfg = configs.outliers_detectors[name]
         cfg = sample_cfg(cfg)
         outliers_det_configs.append((name,cfg))
 
-    outliers_det_configs = OrderedDict(outliers_det_configs)
-    
-    if disable_pyod_outliers:
-        outliers_det_configs = None
-    
+    return OrderedDict(outliers_det_configs)
     
 
-    args.sampler_cfgs = get_samplers_cfgs(args.sampler_names, HYP_CONFIGS)
+def objective_optuna(trial):
     
+    def sample_cfg_optuna(name:str,cfg:dict):
+        for k in cfg.keys():
+            if not isinstance(cfg[k], Iterable):
+                cfg[k] = [k,]
+            cfg[k] = trial.suggest_categorical(name+'__'+k, cfg[k])
+        return cfg
+    
+    args = Arguments()
+    args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
+    pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
+    model_names = ('logisticReg','decisionTree','linearSVC','svc')
+    args.n_iter = 100
+    args.disable_pyod_outliers = True
+    
+    # select model
+    model_name = trial.suggest_categorical("classifier", model_names # HYP_CONFIGS.models.keys()
+                                                  )
+    args.model_names = [model_name,]
+    
+    # select outlier detector for data aug
+    args.disable_pyod_outliers = trial.suggest_categorical("disable_pyod",[True,False])
+    if args.disable_pyod_outliers:
+        args.outliers_det_configs = None
+    else:
+         pyod_detector_name =  trial.suggest_categorical("pyod_det", pyod_detectors)
+         args.pyod_detectors = [pyod_detector_name,]
+         args.outliers_det_configs = OrderedDict()
+         args.outliers_det_configs[pyod_detector_name] = sample_cfg_optuna(pyod_detector_name, 
+                                                                           HYP_CONFIGS.outliers_detectors[pyod_detector_name]
+                                                                           )
+                        
+        
+    # samplers
+    conbimed_sampler = trial.suggest_categorical("conbined_sampler",HYP_CONFIGS.combinedsamplers
+                                                      )
+    sampler_names = [conbimed_sampler]
+    if conbimed_sampler is None:
+        oversampler = trial.suggest_categorical("over_sampler",HYP_CONFIGS.oversamplers
+                                                          )
+        undersampler = trial.suggest_categorical("under_sampler",HYP_CONFIGS.undersamplers
+                                                          )
+        sampler_names = [oversampler, undersampler]       
+    
+    # get sampler config
+    args.sampler_cfgs = []
+    for name in sampler_names:
+        _cfg = {name:sample_cfg_optuna(name, HYP_CONFIGS.samplers[name])}
+        args.sampler_cfgs.append(_cfg)                                                                     
+    
+    results = run(args=args,save_path=None,verbose=0)
+    score = results[model_name].best_score_
+    return score
+
+def demo(args:Arguments):
+        
+    # sample cfg randomly for debugging
+    if args.sampler_names is not None:
+        args.sampler_cfgs = get_samplers_cfgs(args.sampler_names, HYP_CONFIGS)
+    
+    if args.disable_pyod_outliers:
+        args.outliers_det_configs = None
+    else:
+        args.outliers_det_configs = get_pyod_cfgs(args.pyod_detectors,HYP_CONFIGS)
+
     # run hyperparameter search
-    results = run(args=args, 
-                  outliers_det_configs=outliers_det_configs,
+    results = run(args=args,
                   save_path=None,
                   verbose=0)
+    
+    return results
+
+if __name__ == "__main__":
+    
+
+    args = Arguments()
+    args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
+    args.model_names = ('logisticReg','decisionTree','linearSVC','svc') #'gradientBoosting','randomForest',)
+    args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
+    args.sampler_names = ['SMOTE','nearmiss']
+    args.n_iter = 100
+    args.disable_pyod_outliers = True
+    
+    # demo(args=args)
+    
+    # using optuna
+    study = optuna.create_study(direction='maximize',
+                                sampler=TPESampler(),
+                                study_name='demo',
+                                load_if_exists=True,
+                                storage="sqlite:///hypsearch"
+                                )
+    study.optimize(objective_optuna, n_trials=100)
+    print(study.best_trial)
     
     
     
