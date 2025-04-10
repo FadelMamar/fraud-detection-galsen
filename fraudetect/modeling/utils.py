@@ -51,9 +51,9 @@ def hyperparameter_tuning(cv,
                         X_train:np.ndarray,
                         y_train:np.ndarray,
                         model_name:str='randomForest', 
-                        scoring:list[str]=['f1', 'average_precision', 'precision', 'recall'],
+                        scoring:str='f1',
                         n_iter:int=50,
-                        n_jobs:int=-1,
+                        n_jobs:int=8,
                         verbose:int=0,
                         method:str='gridsearch'):
 

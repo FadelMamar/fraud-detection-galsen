@@ -11,6 +11,7 @@ from sklearn.ensemble import (RandomForestClassifier,
                               HistGradientBoostingClassifier, 
                               IsolationForest
                             )
+from xgboost import XGBClassifier
 
 from imblearn.under_sampling import NearMiss, EditedNearestNeighbours
 from imblearn.over_sampling import (SMOTE,
@@ -31,6 +32,7 @@ from pyod.models.ocsvm import OCSVM
 from pyod.models.vae import VAE
 from pyod.models.ae1svm import AE1SVM
 from pyod.models.mo_gaal import MO_GAAL
+from collections import OrderedDict
 
 #%% data aug - pyod
 outliers_detectors = dict()
@@ -60,8 +62,6 @@ outliers_detectors['abod'] = dict(detector=ABOD,
                                   n_neighbors=[5, 7, 9],
                                   contamination=_cnt,
                                   method=['fast',],
-                                  n_jobs=[8,],
-                                  random_state=[41,]
                                   )
 
 outliers_detectors['cblof'] = dict(detector=CBLOF,
@@ -124,7 +124,6 @@ outliers_detectors['vae'] = dict(detector=VAE,
                                  output_activation_name=['relu','sigmoid'],
                                  batch_size=[64,],
                                  epoch_num=[50,],
-                                 gamma=[1.0,],
                                  batch_norm=[True,],
                                  latent_dim=[2,8,16,32],
                                  optimizer_params=[{'weight_decay':1e-1},
@@ -132,7 +131,7 @@ outliers_detectors['vae'] = dict(detector=VAE,
                                                    {'weight_decay':1e-3},
                                                    ],
                                  random_state=[41,],
-                                 use_compile=[True,],
+                                 use_compile=[False,],
                                  contamination=_cnt,
                                  )
 
@@ -145,6 +144,7 @@ outliers_detectors['mo_gaal'] = dict(detector=MO_GAAL,
                                      contamination=_cnt,
                                      )
 
+outliers_detectors = OrderedDict([(k,outliers_detectors[k]) for k in sorted(outliers_detectors.keys(),reverse=False)])
 
 #%% samplers config
 under_sampler = dict()
@@ -206,9 +206,9 @@ combined_sampler['smoteTOMEK'] = dict(sampling_strategy=fracs,
 
 
 #%% models
-config = dict()
+models = dict()
 
-config['logisticReg'] = dict(penalty=['l2'],
+models['logisticReg'] = dict(penalty=['l2'],
                              C=np.logspace(-4, 4, 10).tolist(),
                              class_weight=['balanced', None],
                              solver=['liblinear'],
@@ -218,7 +218,7 @@ config['logisticReg'] = dict(penalty=['l2'],
                              model=LogisticRegression,
                             )
 
-config['svc'] = dict(C=np.logspace(-4, 4, 10).tolist(),
+models['svc'] = dict(C=np.logspace(-4, 4, 10).tolist(),
                      kernel=['poly', 'rbf','linear'],
                      degree=[2,3,5,7],
                      gamma=['auto','scale'],
@@ -230,7 +230,7 @@ config['svc'] = dict(C=np.logspace(-4, 4, 10).tolist(),
                      model=SVC,
                     )
 
-config['linearSVC'] = dict(penalty=['l2'],
+models['linearSVC'] = dict(penalty=['l2'],
                         loss=['square_hinge','hinge'],
                         C=np.logspace(-4, 4, 10).tolist(),
                         class_weight=['balanced', None],
@@ -240,15 +240,15 @@ config['linearSVC'] = dict(penalty=['l2'],
                         tol=[1e-4],
                     )
 
-config['sgdClassifier'] = dict(loss=['hinge','squared_hinge','modified_huber','log_loss',],
+models['sgdClassifier'] = dict(loss=['hinge','squared_hinge','modified_huber','log_loss',],
                                penalty=['l2','l1','elasticnet',None],
                                 alpha=np.logspace(-4, 4, 10).tolist(),
                                 l1_ratio=[0.15, 0.5, 0.85],
-                                class_weight=['balanced', None],
-                                max_iter=[int(1e3)],
-                                learning_rate=['optimal','invscaling','adaptive'],
+                                class_weight=['balanced',],
+                                max_iter=[int(1e4),int(1e5)],
+                                learning_rate=['optimal',],
                                 random_state=[None],
-                                shuffle=[True,False],
+                                shuffle=[False],
                                 tol=[1e-4],
                                 eta0=[1e-5],
                                 early_stopping=[False],
@@ -256,30 +256,30 @@ config['sgdClassifier'] = dict(loss=['hinge','squared_hinge','modified_huber','l
                                 model=SGDClassifier,
                             )
 
-config['decisionTree'] = dict(criterion=['gini','entropy','log_loss'],
+models['decisionTree'] = dict(criterion=['gini','entropy','log_loss'],
                                splitter=['best'],
                                max_depth=[None,5,7,9,10,15,20],
                                min_samples_split=[2,3,4],
                                min_samples_leaf=[1,2],
-                               class_weight=['balanced', None],
+                               class_weight=['balanced', ],
                                max_features=['sqrt','log2',None],
                                random_state=[None],
                                model=DecisionTreeClassifier,
                             )
 
-config['randomForest'] = dict(n_estimators=[10,20,50,100,200,500],
+models['randomForest'] = dict(n_estimators=[10,20,50,100,200,500],
                                criterion=['gini','entropy','log_loss'],
                                max_depth=[None,5,7,9,10,15,20],
                                min_samples_split=[2,3,4],
                                min_samples_leaf=[1,2],
-                               class_weight=['balanced', 'balanced_subsample', None],
+                               class_weight=['balanced', 'balanced_subsample'],
                                max_features=['sqrt','log2',None],
                                random_state=[None],
                                n_jobs=[8],
                                model=RandomForestClassifier,
                             )
 
-config['gradientBoosting'] = dict(loss=['log_loss','exponential'],
+models['gradientBoosting'] = dict(loss=['log_loss','exponential'],
                                   n_estimators=[10,50,100,200,500],
                                   learning_rate=np.logspace(-4, -1, 10).tolist(),
                                   subsample=[0.5, 0.75, 1.0],
@@ -294,7 +294,7 @@ config['gradientBoosting'] = dict(loss=['log_loss','exponential'],
                                 )
 
 # -> handles missig values
-config['histGradientBoosting'] = dict(loss=['log_loss'],
+models['histGradientBoosting'] = dict(loss=['log_loss'],
                                        max_iter=[100,500,1000,10000],
                                        learning_rate=np.logspace(-4, -1, 10).tolist(),
                                        max_depth=[None,3,5,7,9,10,15,20],
@@ -302,14 +302,34 @@ config['histGradientBoosting'] = dict(loss=['log_loss'],
                                        categorical_features=[None],
                                        random_state=[None],
                                        max_bins=[2**5-1, 2**6-1, 2**7-1, 2**8-1],
-                                       class_weight=['balanced', None],
+                                       class_weight=['balanced',],
                                        n_iter_no_change=[10],
                                        tol=[1e-7],
                                        model=HistGradientBoostingClassifier,
                                     )
 
+models['xgboost'] = dict(n_estimators=[10,20,50,75,100],
+                         max_depth=[3,6,9],
+                         learning_rate=[1e-1,1e-2,1e-3],
+                         booster=['gbtree','gblinear','dart'],
+                         n_jobs=[8],
+                         objective=['binary:hinge','binary:logistic'],
+                         tree_method=['hist'],
+                         scale_pos_weight=np.logspace(0, 3, 5).tolist(),
+                         subsample=[0.5,0.75,0.85,1.],
+                         colsample_bytree=[0.5,0.75,0.85,1.],
+                         gamma=[0.],
+                         reg_lambda=[1.],
+                         reg_alpha=[0.],
+                         eval_metric=['error'],
+                         importance_type=['gain'],
+                         random_state=[41],
+                         enable_categorical=[True,],
+                         model=XGBClassifier
+                         )
+
 # #TODO: For the models below, try only after optimizing the previous model
-# config['baggingClassifier'] = dict(estimator=[RandomForestClassifier(), 
+# models['baggingClassifier'] = dict(estimator=[RandomForestClassifier(), 
 #                                               HistGradientBoostingClassifier(), 
 #                                               DecisionTreeClassifier(), 
 #                                               LinearSVC(),
@@ -323,13 +343,13 @@ config['histGradientBoosting'] = dict(loss=['log_loss'],
 #                                    model=BaggingClassifier,
 #                                 )
 
-# config['votingClassifier'] = dict(estimators=[...],
+# models['votingClassifier'] = dict(estimators=[...],
 #                                    voting=['soft'],
 #                                    random_state=[41],
 #                                    model=VotingClassifier,
 #                                 )
 
-# config['adaBoostClassifier'] = dict(estimator=[RandomForestClassifier(), 
+# models['adaBoostClassifier'] = dict(estimator=[RandomForestClassifier(), 
 #                                               HistGradientBoostingClassifier(), 
 #                                               DecisionTreeClassifier(), 
 #                                               LinearSVC(),
@@ -341,7 +361,7 @@ config['histGradientBoosting'] = dict(loss=['log_loss'],
 #                          model=AdaBoostClassifier,
 #                         )
 
-# config['stackingClassifier'] = dict(estimators=[...],
+# models['stackingClassifier'] = dict(estimators=[...],
 #                                  final_estimator=[LogisticRegression(),SVC(),SGDClassifier()],
 #                                  cv=[None],
 #                                  stack_method=['auto'],

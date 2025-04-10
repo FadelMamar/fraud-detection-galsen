@@ -3,6 +3,9 @@ from fraudetect.features import perform_feature_engineering, transform_data
 from fraudetect.config import COLUMNS_TO_DROP, COLUMNS_TO_ONE_HOT_ENCODE, COLUMNS_TO_SCALE
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 import numpy as np
+from fraudetect import import_from_path, sample_cfg
+from collections import OrderedDict
+
 
 df_data = load_data(r"D:\fraud-detection-galsen\data\training.csv")
 
@@ -19,25 +22,41 @@ X_train, y_train = perform_feature_engineering(transactions_df=df_data,
                                            windows_size_in_days=[1,7,30]
                                            )
 
-
-
-#%% Outliers detectors
-from fraudetect.features import concat_decision_scores_pyod
-from fraudetect.detectors import get_detector, instantiate_detector
-from fraudetect import import_from_path, sample_cfg
-
+#%% load configs
 configs = import_from_path('hyp_search_conf',
                            r'D:\fraud-detection-galsen\tools\hyp_search_conf.py')
 
+#%% Outliers detectors
+from fraudetect.features import fit_outliers_detectors, concat_outliers_probs_pyod, load_transforms_pyod
+from fraudetect.detectors import get_detector, instantiate_detector
+
 model_list = list()
-for name in configs.outliers_detectors.keys():
+# names = configs.outliers_detectors.keys()
+names = ['cblof','iforest']
+
+outliers_det_configs = []
+for name in sorted(names):
     detector, cfg = get_detector(name=name, config=configs.outliers_detectors)
     cfg = sample_cfg(cfg)
     detector = instantiate_detector(detector, cfg)
     model_list.append(detector)
     
-X_t = concat_decision_scores_pyod(model_list, X_train)
+    cfg['detector'] = configs.outliers_detectors[name]['detector']
+    outliers_det_configs.append((name,cfg))
 
+model_list = fit_outliers_detectors(model_list, X_train)
+X_t = concat_outliers_probs_pyod(fitted_detector_list=model_list, 
+                                 X=X_train,
+                                 method='linear',
+                                 add_confidence=True,
+                                 )
+
+outliers_det_configs = OrderedDict(outliers_det_configs)
+transform = load_transforms_pyod(X_train=X_train,
+                                 outliers_det_configs=outliers_det_configs,
+                                 method='linear',
+                                 add_confidence=False,
+                                 ) 
 
 #%%  Undersampling
 from imblearn.under_sampling import (TomekLinks, 
@@ -62,9 +81,10 @@ from sklearn.cluster import MiniBatchKMeans
 # under_sampler_knn = AllKNN(sampling_strategy='majority',n_neighbors=5,kind_sel='all',allow_minority=False,n_jobs=4)
 # X_knn,  y_knn = under_sampler_knn.fit_resample(X_train, y_train)
 
-frac = float(2*y_train.sum()/(1-y_train).sum())
-under_sampler_nm = NearMiss(sampling_strategy=frac,n_neighbors=5,version=1,n_jobs=4)
-X_nm,  y_nm = under_sampler_nm.fit_resample(X_train, y_train)
+# >> Selected
+# frac = float(2*y_train.sum()/(1-y_train).sum())
+# under_sampler_nm = NearMiss(sampling_strategy=frac,n_neighbors=5,version=1,n_jobs=4)
+# X_nm,  y_nm = under_sampler_nm.fit_resample(X_train, y_train)
 
 # under_sampler_enn = EditedNearestNeighbours(sampling_strategy='majority',n_neighbors=5,kind_sel='mode',n_jobs=4)
 # X_enn,  y_enn = under_sampler_enn.fit_resample(X_train, y_train)
@@ -94,52 +114,58 @@ from imblearn.over_sampling import (SMOTE,
                                     SVMSMOTE)
 
 
-frac = float(2*y_train.sum()/(1-y_train).sum())
+# frac = float(2*y_train.sum()/(1-y_train).sum())
 
-oversampler_smote = SMOTE(sampling_strategy=frac,random_state=41, k_neighbors=5,)
-X_ste, y_ste = oversampler_smote.fit_resample(X_train, y_train)
-print(y_ste.sum()/y_train.sum())
+# oversampler_smote = SMOTE(sampling_strategy=frac,random_state=41, k_neighbors=5,)
+# X_ste, y_ste = oversampler_smote.fit_resample(X_train, y_train)
+# print(y_ste.sum()/y_train.sum())
 
-oversampler_ada = ADASYN(sampling_strategy=frac,random_state=41, n_neighbors=5,)
-X_ada, y_ada = oversampler_ada.fit_resample(X_train, y_train)
-print(y_ada.sum()/y_train.sum())
+# oversampler_ada = ADASYN(sampling_strategy=frac,random_state=41, n_neighbors=5,)
+# X_ada, y_ada = oversampler_ada.fit_resample(X_train, y_train)
+# print(y_ada.sum()/y_train.sum())
 
-oversampler_bste = BorderlineSMOTE(sampling_strategy=frac,random_state=41,m_neighbors=5,k_neighbors=10,kind='borderline-1')
-X_bste, y_bste = oversampler_bste.fit_resample(X_train, y_train)
-print(y_bste.sum()/y_train.sum())
+# oversampler_bste = BorderlineSMOTE(sampling_strategy=frac,random_state=41,m_neighbors=5,k_neighbors=10,kind='borderline-1')
+# X_bste, y_bste = oversampler_bste.fit_resample(X_train, y_train)
+# print(y_bste.sum()/y_train.sum())
 
-oversampler_sste = SVMSMOTE(sampling_strategy=frac,random_state=41,out_step=0.5,m_neighbors=5,k_neighbors=3)
-X_sste, y_sste = oversampler_sste.fit_resample(X_train, y_train)
-print(y_sste.sum()/y_train.sum())
-
-
+# oversampler_sste = SVMSMOTE(sampling_strategy=frac,random_state=41,out_step=0.5,m_neighbors=5,k_neighbors=3)
+# X_sste, y_sste = oversampler_sste.fit_resample(X_train, y_train)
+# print(y_sste.sum()/y_train.sum())
 
 
 
 
-#%% Test of code
+
+
+#%% Test of samplers
 from fraudetect.features import data_resampling
 from fraudetect.sampling import sample_cfg, get_sampler
-from hyp_search_conf import under_sampler, over_sampler, combined_sampler, outliers_detectors
+# from hyp_search_conf import under_sampler, over_sampler, combined_sampler, outliers_detectors
 
 
 sampler_names=['nearmiss',] #'nearmiss','SMOTE']
 
-sampler_cfgs = list()
 
-for name in sampler_names:
+def get_samplers_cfgs(sampler_names, configs):
     
-    if name in under_sampler.keys():
-        cfg = under_sampler[name]
-        
-    elif name in over_sampler.keys():
-        cfg = over_sampler[name]
-        
-    elif name in combined_sampler.keys():
-        cfg = combined_sampler[name]
+    sampler_cfgs = list()
     
-    cfg = sample_cfg(cfg) # for test purposes
-    sampler_cfgs.append({name:cfg})
+    for name in sampler_names:
+        
+        if name in configs.under_sampler.keys():
+            cfg = configs.under_sampler[name]
+            
+        elif name in configs.over_sampler.keys():
+            cfg = configs.over_sampler[name]
+            
+        elif name in configs.combined_sampler.keys():
+            cfg = configs.combined_sampler[name]
+        
+        cfg = sample_cfg(cfg) # for test purposes
+        sampler_cfgs.append({name:cfg})
+    return sampler_cfgs
+
+sampler_cfgs = get_samplers_cfgs(sampler_names, configs)
 
 X_t, y_t = data_resampling(X=X_train,
                             y=y_train,

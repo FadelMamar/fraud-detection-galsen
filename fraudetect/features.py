@@ -1,9 +1,12 @@
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.pipeline import Pipeline
 from pyod.models.base import BaseDetector
 import pandas as pd
 import numpy as np
 from .sampling import get_sampler, build_samplers_pipeline
+from tqdm import tqdm
+from collections import OrderedDict
+from functools import partial
+from .detectors import get_detector,instantiate_detector
 
 def get_customer_spending_behaviour_features(customer_transactions, windows_size_in_days=[1,7,30]):
     
@@ -82,7 +85,6 @@ def perform_feature_engineering(transactions_df,
                                 delay_period_accountid:int=7,
                                 columns_to_scale:list=None,
                                 mode:str='train',
-                                samplers:list=None,
                             )->pd.DataFrame:
     """
     Feature engineering function to be used in the pipeline.
@@ -155,7 +157,9 @@ def transform_data(train_df:pd.DataFrame, val_df:pd.DataFrame|None,
                    columns_to_drop:str,
                    columns_to_onehot_encode:str,
                    columns_to_scale:str,
-                   transform=None,
+                   train_transform=None,
+                   val_transform=None,
+                   delay_period_accountid:int=7,
                    windows_size_in_days=[1,7,30])->tuple:
 
     # scaler and encoders
@@ -169,9 +173,10 @@ def transform_data(train_df:pd.DataFrame, val_df:pd.DataFrame|None,
                                                onehot_encoder=onehot_encoder,
                                                scaler=scaler,
                                                mode='train',
+                                               delay_period_accountid=delay_period_accountid,
                                                windows_size_in_days=windows_size_in_days)
-    if transform is not None:
-        X_train, y_train = transform(X_train,y_train)
+    if train_transform is not None:
+        X_train, y_train = train_transform(X_train,y_train)
         
     if val_df is None:
         return (X_train, y_train), (onehot_encoder, scaler)
@@ -183,7 +188,10 @@ def transform_data(train_df:pd.DataFrame, val_df:pd.DataFrame|None,
                                                onehot_encoder=onehot_encoder,
                                                scaler=scaler,
                                                mode='val',
+                                               delay_period_accountid=delay_period_accountid,
                                                windows_size_in_days=windows_size_in_days)
+    if val_transform is not None:
+        X_val, y_val = val_transform(X_val, y_val)
     
     return (X_train, y_train, X_val, y_val), (onehot_encoder, scaler)
 
@@ -195,23 +203,94 @@ def data_resampling(X:np.ndarray,
     sampler_list = list()
 
     for sampler_name,cfg in zip(sampler_names, sampler_cfgs):
-        sampler, cfg = get_sampler(name=sampler_name, config=cfg)
-        sampler = sampler(**cfg)
-        sampler_list.append(sampler)
+        if sampler_name is not None:
+            sampler, cfg = get_sampler(name=sampler_name, config=cfg)
+            sampler = sampler(**cfg)
+            sampler_list.append(sampler)
     
     pipe = build_samplers_pipeline(sampler_list=sampler_list)
 
     return pipe.fit_resample(X=X,y=y)
 
-def concat_decision_scores_pyod(model_list:list[BaseDetector], X_train:np.ndarray):
+def fit_outliers_detectors(detector_list:list[BaseDetector], X_train:np.ndarray)->list[BaseDetector]:
     
-    scores = []
+    model_list_ = list()
     
-    for model in model_list:
+    for model in tqdm(detector_list,desc='fitting-outliers-det-pyod'):
         model.fit(X_train)
-        score = model.decision_scores_
-        scores.append(score.reshape((-1,1)))
+        model_list_.append(model)
     
-    X_t = np.hstack([X_train] + scores)
+    return model_list_
+    
+def concat_outliers_probs_pyod(fitted_detector_list:list[BaseDetector],
+                               X:np.ndarray,
+                               method='unify',
+                               add_confidence:bool=False
+                               ):
+    
+    probs = []
+    
+    for model in tqdm(fitted_detector_list,desc='concat-outliers-probs-pyod'):
+        
+        score = model.predict_proba(X,
+                                    method=method,
+                                    return_confidence=add_confidence
+                                    )
+        if add_confidence:
+            prob, cnf = score
+            probs.append(cnf.reshape((-1,1)))
+        else:
+            prob=score
+            
+        probs.append(prob[:,1].reshape((-1,1))) # prob is shape[m,2] (prob normal, prob outlier)
+                     
+    
+    X_t = np.hstack([X] + probs)
     
     return X_t
+
+def load_transforms_pyod(X_train:np.ndarray, 
+                         outliers_det_configs:OrderedDict, 
+                         method:str='unify', 
+                         add_confidence:bool=False,
+                         fitted_detector_list:list[BaseDetector]=None):
+    
+    if fitted_detector_list is not None:
+        return partial(concat_outliers_probs_pyod,
+                        fitted_detector_list=fitted_detector_list,
+                        method=method,
+                        add_confidence=add_confidence
+                    )
+    
+    assert isinstance(outliers_det_configs, OrderedDict)
+    
+    model_list = list()
+    
+    # instantiate detectors
+    names = outliers_det_configs.keys()
+    for name in names:
+        detector, cfg = get_detector(name=name, config=outliers_det_configs)
+        detector = instantiate_detector(detector, cfg)
+        model_list.append(detector)
+    
+    # fit detectors
+    model_list = fit_outliers_detectors(model_list, X_train)    
+    
+    # transform func
+    transform_func = partial(concat_outliers_probs_pyod,
+                             fitted_detector_list=model_list,
+                             method=method,
+                             add_confidence=add_confidence
+                             )
+    
+    return transform_func
+
+
+
+
+
+
+
+
+
+
