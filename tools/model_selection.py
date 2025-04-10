@@ -26,6 +26,7 @@ from functools import partial
 import optuna
 from optuna.samplers import TPESampler
 from collections.abc import Iterable
+from copy import copy, deepcopy
 
 try:
     HYP_CONFIGS = import_from_path(
@@ -123,7 +124,7 @@ def load_models_cfg(names: list[str]):
     return {name: HYP_CONFIGS.models[name] for name in names}
 
 
-def run(args: Arguments, save_path: str = None, verbose=1):
+def run(args: Arguments, save_path: str = None, verbose=0):
     # args
     data_path = args.data_path
 
@@ -218,73 +219,91 @@ def get_pyod_cfgs(names, configs):
 
     return OrderedDict(outliers_det_configs)
 
+class Objective(object):
 
-def objective_optuna(trial):
-    def sample_cfg_optuna(name: str, cfg: dict):
+    def __init__(self,
+                 pyod_detectors:list[str]=["iforest", "cblof", "loda", "knn"],
+                 model_names:list[str]=["logisticReg", "decisionTree", "svc"],
+                 data_path:str=r"D:\fraud-detection-galsen\data\training.csv",
+                 cv_n_iter:int=100,
+                 disable_pyod:bool=True,
+                 disable_samplers:bool=True,
+                 cv_method:str='random',
+                 verbose:int=0
+                 ):
+
+        self.args = Arguments()
+        self.args.data_path = data_path
+        self.pyod_detectors = pyod_detectors
+        self.model_names = model_names
+        self.args.n_iter=cv_n_iter
+        self.disable_pyod=disable_pyod
+        self.disable_samplers=disable_samplers
+        self.args.cv_method = cv_method
+        self.verbose=verbose
+    
+    def sample_cfg_optuna(self, trial, name: str, cfg: dict):
         for k in cfg.keys():
             if not isinstance(cfg[k], Iterable):
                 continue
             cfg[k] = trial.suggest_categorical(name + "__" + k, cfg[k])
         return cfg
+    
+        
+    def __call__(self, trial):
 
-    args = Arguments()
-    args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
-    pyod_detectors = ("iforest", "cblof", "loda", "knn")
-    model_names = ("logisticReg", "decisionTree", "linearSVC", "svc")
-    args.n_iter = 100
-    args.disable_pyod_outliers = True
-
-    # select model
-    model_name = trial.suggest_categorical(
-        "classifier",
-        model_names,  # HYP_CONFIGS.models.keys()
-    )
-    args.model_names = [
-        model_name,
-    ]
-
-    # select outlier detector for data aug
-    args.disable_pyod_outliers = trial.suggest_categorical("disable_pyod", [True, True])
-    if args.disable_pyod_outliers:
-        args.outliers_det_configs = None
-    else:
-        pyod_detector_name = trial.suggest_categorical("pyod_det", pyod_detectors)
-        args.pyod_detectors = [
-            pyod_detector_name,
+        # select model
+        model_name = trial.suggest_categorical(
+            "classifier",
+            self.model_names,  # HYP_CONFIGS.models.keys()
+        )
+        self.args.model_names = [
+            model_name,
         ]
-        args.outliers_det_configs = OrderedDict()
-        args.outliers_det_configs[pyod_detector_name] = sample_cfg_optuna(
-            pyod_detector_name, HYP_CONFIGS.outliers_detectors[pyod_detector_name]
-        )
 
-    # samplers
-    args.sampler_cfgs = None
-    args.sampler_names = None
-    if trial.suggest_categorical("disable_samplers", [True, False]):
-        conbimed_sampler = trial.suggest_categorical(
-            "conbined_sampler", HYP_CONFIGS.combinedsamplers
-        )
-        sampler_names = [conbimed_sampler]
-        if conbimed_sampler is None:
-            oversampler = trial.suggest_categorical(
-                "over_sampler", HYP_CONFIGS.oversamplers
+        # select outlier detector for data aug
+        self.args.disable_pyod_outliers = trial.suggest_categorical("disable_pyod", [True, self.disable_pyod])
+        if self.args.disable_pyod_outliers:
+            self.args.outliers_det_configs = None
+        else:
+            pyod_detector_name = trial.suggest_categorical("pyod_det", self.pyod_detectors)
+            self.args.pyod_detectors = [
+                pyod_detector_name,
+            ]
+            self.args.outliers_det_configs = OrderedDict()
+            self.args.outliers_det_configs[pyod_detector_name] = self.sample_cfg_optuna(trial,
+                pyod_detector_name, HYP_CONFIGS.outliers_detectors[pyod_detector_name]
             )
-            undersampler = trial.suggest_categorical(
-                "under_sampler", HYP_CONFIGS.undersamplers
+
+        # samplers
+        self.args.sampler_cfgs = None
+        self.args.sampler_names = None
+        if trial.suggest_categorical("disable_samplers", [True, self.disable_samplers]):
+            conbimed_sampler = trial.suggest_categorical(
+                "conbined_sampler", HYP_CONFIGS.combinedsamplers + [None,]
             )
-            sampler_names = [oversampler, undersampler]
+            sampler_names = [conbimed_sampler]
+            if conbimed_sampler is None:
+                oversampler = trial.suggest_categorical(
+                    "over_sampler", HYP_CONFIGS.oversamplers
+                )
+                undersampler = trial.suggest_categorical(
+                    "under_sampler", HYP_CONFIGS.undersamplers
+                )
+                sampler_names = [oversampler, undersampler]
 
-        # get sampler config
-        args.sampler_cfgs = []
-        for name in sampler_names:
-            _cfg = {name: sample_cfg_optuna(name, HYP_CONFIGS.samplers[name])}
-            args.sampler_cfgs.append(_cfg)
+            # get sampler config
+            self.args.sampler_cfgs = []
+            for name in sampler_names:
+                # if name is not None:
+                _cfg = {name: self.sample_cfg_optuna(trial, name, HYP_CONFIGS.samplers[name])}
+                self.args.sampler_cfgs.append(_cfg)
 
-    # run cv
-    results = run(args=args, save_path=None, verbose=0)
-    score = results[model_name].best_score_
+        # run cv
+        results = run(args=self.args, save_path=None, verbose=self.verbose)
+        score = results[model_name].best_score_
 
-    return score
+        return score
 
 
 def demo(args: Arguments):
@@ -318,9 +337,21 @@ if __name__ == "__main__":
     study = optuna.create_study(
         direction="maximize",
         sampler=TPESampler(multivariate=True, group=True),
-        study_name="demo",
+        # study_name="demo",
         load_if_exists=True,
         storage="sqlite:///hypsearch.sql",
     )
-    study.optimize(objective_optuna, n_trials=100)
+    objective_optuna = Objective(data_path=r"D:\fraud-detection-galsen\data\training.csv",
+                                 pyod_detectors=('iforest', 'cblof', 'loda', 'knn'),
+                                 model_names=('logisticReg','decisionTree','svc'),
+                                 cv_n_iter=100,
+                                 disable_pyod=True,
+                                 disable_samplers=True,
+                                 cv_method='optuna'
+                                 )
+    study.optimize(objective_optuna,
+                   n_trials=100,
+                   n_jobs=1,
+                   show_progress_bar=True,
+                   timeout=60*60*3)
     print(study.best_trial)

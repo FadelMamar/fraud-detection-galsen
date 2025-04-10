@@ -48,13 +48,20 @@ def build_samplers_pipeline(sampler_list: list) -> Pipeline:
 def data_resampling(
     X: np.ndarray, y: np.ndarray, sampler_names: list[str], sampler_cfgs: list[dict]
 ) -> tuple[np.ndarray, np.ndarray]:
+    
+    assert len(sampler_names)==len(sampler_cfgs)
+    
+    if len(sampler_names)<1:
+        print('No samplers provided')
+        return X,y
+    
     sampler_list = list()
 
     for sampler_name, cfg in zip(sampler_names, sampler_cfgs):
-        if sampler_name is not None:
-            sampler, cfg = get_sampler(name=sampler_name, config=cfg)
-            sampler = sampler(**cfg)
-            sampler_list.append(sampler)
+        # if sampler_name is not None:
+        sampler, cfg = get_sampler(name=sampler_name, config=cfg)
+        sampler = sampler(**cfg)
+        sampler_list.append(sampler)
 
     pipe = build_samplers_pipeline(sampler_list=sampler_list)
 

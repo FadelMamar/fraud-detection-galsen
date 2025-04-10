@@ -51,8 +51,8 @@ class Arguments:
     scoring = "f1"
 
     # training parameters
-    max_epochs: int = 50
-    learning_rate: float = 1e-3
-    weightdecay: float = 1e-4
+    # max_epochs: int = 50
+    # learning_rate: float = 1e-3
+    # weightdecay: float = 1e-4
 
     # data augmentation

@@ -11,7 +11,8 @@ import pandas as pd
 from sklearn.metrics import get_scorer, get_scorer_names
 import random
 from collections.abc import Iterable
-
+import optuna
+from optuna.samplers import TPESampler
 
 def evaluate(classifier, X, y):
     metrics = ["accuracy", "f1", "average_precision", "precision", "recall"]
@@ -66,7 +67,7 @@ def hyperparameter_tuning(
     n_iter: int = 50,
     n_jobs: int = 8,
     verbose: int = 0,
-    method: str = "gridsearch",
+    method: str = "optuna",
 ) -> BaseSearchCV:
     # Prequential search for hyperparameter tuning
     model, model_cfg = get_model(model_name, config)
@@ -109,10 +110,33 @@ def hyperparameter_tuning(
             random_state=41,
             verbose=verbose,
         )
+    
+    elif method == 'optuna':
+        study = optuna.create_study(
+        direction="maximize",
+        sampler=TPESampler(multivariate=True, group=True),
+        load_if_exists=True,
+        )
+        param_dist = {k:optuna.distributions.CategoricalDistribution(v) for k,v in model_cfg.items()}
+        search_engine = optuna.integration.OptunaSearchCV(model(),
+                                                          param_distributions=param_dist,
+                                                          cv=cv,
+                                                          refit=True,
+                                                          n_jobs=n_jobs,
+                                                          study=study,
+                                                          scoring=scoring,
+                                                          max_iter=10000,
+                                                          timeout=60*3,
+                                                          n_trials=n_iter,
+                                                          random_state=41,
+                                                          verbose=verbose
+
+
+        )
 
     else:
         raise ValueError(
-            "Invalid method. Choose either 'gridsearch', 'halving' or 'random'."
+            "Invalid method. Choose either 'gridsearch', 'optuna', 'halving' or 'random'."
         )
 
     search_engine.fit(X_train, y_train)

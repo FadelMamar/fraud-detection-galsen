@@ -244,9 +244,9 @@ samplers["smoteTOMEK"] = dict(
     sampling_strategy=fracs, random_state=[41], n_job=[8], sampler=SMOTETomek
 )
 
-undersamplers = ["nearmiss", None]
-oversamplers = ["SMOTE", "adasyn", "borderlineSMOTE", "svmSMOTE", None]
-combinedsamplers = ["smoteENN", "smoteTOMEK", None, None]
+undersamplers = ["nearmiss",]
+oversamplers = ["SMOTE", "adasyn", "borderlineSMOTE", "svmSMOTE",]
+combinedsamplers = ["smoteENN", "smoteTOMEK",]
 
 
 # %% models
@@ -300,7 +300,7 @@ models["sgdClassifier"] = dict(
     class_weight=[
         "balanced",
     ],
-    max_iter=[int(1e4), int(1e5)],
+    max_iter=[int(1e5)],
     learning_rate=[
         "optimal",
     ],
