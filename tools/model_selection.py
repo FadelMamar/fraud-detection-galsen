@@ -279,6 +279,8 @@ class Objective(object):
         self.args.sampler_cfgs = None
         self.args.sampler_names = None
         if trial.suggest_categorical("disable_samplers", [True, self.disable_samplers]):
+            pass
+        else:
             conbimed_sampler = trial.suggest_categorical(
                 "conbined_sampler", HYP_CONFIGS.combinedsamplers + [None,]
             )
@@ -351,7 +353,7 @@ if __name__ == "__main__":
                                  )
     study.optimize(objective_optuna,
                    n_trials=100,
-                   n_jobs=1,
+                   n_jobs=8,
                    show_progress_bar=True,
                    timeout=60*60*3)
     print(study.best_trial)
