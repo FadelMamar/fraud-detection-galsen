@@ -215,7 +215,7 @@ def objective_optuna(trial):
     pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
     model_names = ('logisticReg','decisionTree','linearSVC','svc')
     args.n_iter = 100
-    args.disable_pyod_outliers = True
+    args.disable_pyod_outliers = False
     
     # select model
     model_name = trial.suggest_categorical("classifier", model_names # HYP_CONFIGS.models.keys()
@@ -223,7 +223,7 @@ def objective_optuna(trial):
     args.model_names = [model_name,]
     
     # select outlier detector for data aug
-    args.disable_pyod_outliers = trial.suggest_categorical("disable_pyod",[True,False])
+    args.disable_pyod_outliers = trial.suggest_categorical("disable_pyod",[False,False])
     if args.disable_pyod_outliers:
         args.outliers_det_configs = None
     else:
@@ -236,24 +236,29 @@ def objective_optuna(trial):
                         
         
     # samplers
-    conbimed_sampler = trial.suggest_categorical("conbined_sampler",HYP_CONFIGS.combinedsamplers
-                                                      )
-    sampler_names = [conbimed_sampler]
-    if conbimed_sampler is None:
-        oversampler = trial.suggest_categorical("over_sampler",HYP_CONFIGS.oversamplers
+    args.sampler_cfgs = None
+    args.sampler_names = None
+    if trial.suggest_categorical("disable_samplers",[True,False]):
+        conbimed_sampler = trial.suggest_categorical("conbined_sampler",HYP_CONFIGS.combinedsamplers
                                                           )
-        undersampler = trial.suggest_categorical("under_sampler",HYP_CONFIGS.undersamplers
-                                                          )
-        sampler_names = [oversampler, undersampler]       
+        sampler_names = [conbimed_sampler]
+        if conbimed_sampler is None:
+            oversampler = trial.suggest_categorical("over_sampler",HYP_CONFIGS.oversamplers
+                                                              )
+            undersampler = trial.suggest_categorical("under_sampler",HYP_CONFIGS.undersamplers
+                                                              )
+            sampler_names = [oversampler, undersampler]       
+        
+        # get sampler config
+        args.sampler_cfgs = []
+        for name in sampler_names:
+            _cfg = {name:sample_cfg_optuna(name, HYP_CONFIGS.samplers[name])}
+            args.sampler_cfgs.append(_cfg)                                                                     
     
-    # get sampler config
-    args.sampler_cfgs = []
-    for name in sampler_names:
-        _cfg = {name:sample_cfg_optuna(name, HYP_CONFIGS.samplers[name])}
-        args.sampler_cfgs.append(_cfg)                                                                     
-    
+    # run cv
     results = run(args=args,save_path=None,verbose=0)
     score = results[model_name].best_score_
+    
     return score
 
 def demo(args:Arguments):
@@ -276,23 +281,23 @@ def demo(args:Arguments):
 
 if __name__ == "__main__":
     
-
-    args = Arguments()
-    args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
-    args.model_names = ('logisticReg','decisionTree','linearSVC','svc') #'gradientBoosting','randomForest',)
-    args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
-    args.sampler_names = ['SMOTE','nearmiss']
-    args.n_iter = 100
-    args.disable_pyod_outliers = True
-    
+    # Debugging
+    # args = Arguments()
+    # args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
+    # args.model_names = ('logisticReg','decisionTree','linearSVC','svc') #'gradientBoosting','randomForest',)
+    # args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
+    # args.sampler_names = ['SMOTE','nearmiss']
+    # args.n_iter = 100
+    # args.disable_pyod_outliers = True
     # demo(args=args)
+    
     
     # using optuna
     study = optuna.create_study(direction='maximize',
-                                sampler=TPESampler(),
+                                sampler=TPESampler(multivariate=True,group=True),
                                 study_name='demo',
                                 load_if_exists=True,
-                                storage="sqlite:///hypsearch"
+                                storage="sqlite:///hypsearch.sql"
                                 )
     study.optimize(objective_optuna, n_trials=100)
     print(study.best_trial)
