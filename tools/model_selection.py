@@ -22,11 +22,9 @@ from fraudetect.sampling import data_resampling
 from fraudetect import import_from_path, sample_cfg
 from collections import OrderedDict
 import joblib
-from functools import partial
 import optuna
 from optuna.samplers import TPESampler
 from collections.abc import Iterable
-from copy import copy, deepcopy
 
 try:
     HYP_CONFIGS = import_from_path(
@@ -125,9 +123,8 @@ def load_models_cfg(names: list[str]):
 
 
 def run(args: Arguments, save_path: str = None, verbose=0):
-    # args
+    
     data_path = args.data_path
-
     delta_train = args.delta_train
     delta_delay = args.delta_delay
     delta_test = args.delta_test
@@ -302,8 +299,13 @@ class Objective(object):
                 self.args.sampler_cfgs.append(_cfg)
 
         # run cv
-        results = run(args=self.args, save_path=None, verbose=self.verbose)
-        score = results[model_name].best_score_
+        try:
+            results = run(args=self.args, save_path=None, verbose=self.verbose)
+            score = results[model_name].best_score_
+        except Exception as e:
+            print(e)
+            print(results,'\n\n')
+            score = 0.
 
         return score
 

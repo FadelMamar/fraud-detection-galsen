@@ -5,12 +5,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import (
     RandomForestClassifier,
     GradientBoostingClassifier,
-    AdaBoostClassifier,
-    BaggingClassifier,
-    VotingClassifier,
-    StackingClassifier,
     HistGradientBoostingClassifier,
-    IsolationForest,
 )
 from xgboost import XGBClassifier
 

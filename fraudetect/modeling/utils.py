@@ -1,4 +1,3 @@
-from sklearn.experimental import enable_halving_search_cv
 from sklearn.model_selection import (
     GridSearchCV,
     HalvingRandomSearchCV,
@@ -8,7 +7,7 @@ from sklearn.model_selection._search import BaseSearchCV
 import json
 import numpy as np
 import pandas as pd
-from sklearn.metrics import get_scorer, get_scorer_names
+from sklearn.metrics import get_scorer
 import random
 from collections.abc import Iterable
 import optuna

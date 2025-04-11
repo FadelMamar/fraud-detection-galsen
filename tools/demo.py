@@ -1,5 +1,5 @@
-from fraudetect.dataset import load_data, data_loader, train_test_split
-from fraudetect.features import perform_feature_engineering, transform_data
+from fraudetect.dataset import load_data
+from fraudetect.features import perform_feature_engineering
 from fraudetect.config import (
     COLUMNS_TO_DROP,
     COLUMNS_TO_ONE_HOT_ENCODE,
@@ -73,18 +73,6 @@ transform = load_transforms_pyod(
 )
 
 # %%  Undersampling
-from imblearn.under_sampling import (
-    TomekLinks,
-    RandomUnderSampler,
-    AllKNN,
-    NearMiss,
-    EditedNearestNeighbours,
-    CondensedNearestNeighbour,
-    OneSidedSelection,
-    ClusterCentroids,
-    NeighbourhoodCleaningRule,
-)
-from sklearn.cluster import MiniBatchKMeans
 
 
 # under_sampler = TomekLinks(sampling_strategy='majority',n_jobs=4)
@@ -122,7 +110,6 @@ from sklearn.cluster import MiniBatchKMeans
 
 # %% Oversampling
 
-from imblearn.over_sampling import SMOTE, ADASYN, BorderlineSMOTE, KMeansSMOTE, SVMSMOTE
 
 
 # frac = float(2*y_train.sum()/(1-y_train).sum())
@@ -145,7 +132,7 @@ from imblearn.over_sampling import SMOTE, ADASYN, BorderlineSMOTE, KMeansSMOTE, 
 
 
 # %% Test of samplers
-from fraudetect.sampling import sample_cfg, get_sampler, data_resampling
+from fraudetect.sampling import sample_cfg, data_resampling
 
 
 sampler_names = [
