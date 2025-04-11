@@ -26,6 +26,13 @@ def load_data(data_path: str = "../data/training.csv") -> pd.DataFrame:
     df_data["TX_TIME_DAYS"] = (
         df_data["TX_DATETIME"] - df_data["TX_DATETIME"].min()
     ).dt.days
+    
+    # change dtype
+    df_data = df_data.convert_dtypes()
+    df_data['TX_FRAUD'] = df_data['TX_FRAUD'].astype('UInt8')
+    df_data['CountryCode'] = df_data['CountryCode'].astype(str)
+    df_data['PricingStrategy'] = df_data['PricingStrategy'].astype(str)
+    df_data['TX_TIME_DAYS'] = df_data['TX_TIME_DAYS'].astype('UInt8')
 
     return df_data
 

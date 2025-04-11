@@ -8,8 +8,12 @@ Created on Thu Apr 10 16:51:56 2025
 # %% funcs & imports
 from collections import OrderedDict
 from collections.abc import Iterable
+from copy import deepcopy
+from pathlib import Path
 import joblib
+import json
 import optuna
+from datetime import datetime,date
 from optuna.samplers import TPESampler
 import numpy as np
 import pandas as pd
@@ -150,6 +154,7 @@ def run(args: Arguments, save_path: str = None, verbose=0):
                                             verbose=bool(verbose),
                                             add_concat_features_transform=args.concat_features is not None,
                                             n_jobs=args.n_jobs,
+                                            concat_features_encoding_kwargs=args.concat_features_encoding_kwargs,
                                             **kwargs
                                             )
     kwargs_tranform_data = dict(
@@ -173,9 +178,10 @@ def run(args: Arguments, save_path: str = None, verbose=0):
                                     )
     
     # transformed column names
-    columns_of_transformed_data = list(
-                                        map(lambda name: name.split('__')[1],
-                                            list(col_transformer.get_feature_names_out())))
+    # columns_of_transformed_data = list(map(lambda name: name.split('__')[1],
+    #                                         list(col_transformer.get_feature_names_out()))
+    #                                     )
+    columns_of_transformed_data = col_transformer.get_feature_names_out()
     df_train_preprocessed = pd.DataFrame(X_train, columns=columns_of_transformed_data)
 
     # load pyod transform and apply it to X_train
@@ -209,10 +215,6 @@ def run(args: Arguments, save_path: str = None, verbose=0):
     return best_results
 
 
-# %% Run
-
-
-# helpers for debugging
 def get_samplers_cfgs(sampler_names, configs):
     sampler_cfgs = list()
 
@@ -234,28 +236,39 @@ def get_pyod_cfgs(names, configs):
 
     return OrderedDict(outliers_det_configs)
 
+
+def demo(args: Arguments):
+    # sample cfg randomly for debugging
+    if args.sampler_names is not None:
+        args.sampler_cfgs = get_samplers_cfgs(args.sampler_names, HYP_CONFIGS)
+
+    if args.disable_pyod_outliers:
+        args.outliers_det_configs = None
+    else:
+        args.outliers_det_configs = get_pyod_cfgs(args.pyod_detectors, HYP_CONFIGS)
+
+    # run hyperparameter search
+    results = run(args=args, save_path=None, verbose=0)
+
+    return results
+
+
 class Objective(object):
 
     def __init__(self,
-                 pyod_detectors:list[str]=["iforest", "cblof", "loda", "knn"],
-                 model_names:list[str]=["logisticReg", "decisionTree", "svc"],
-                 data_path:str=r"D:\fraud-detection-galsen\data\training.csv",
-                 cv_n_iter:int=100,
-                 disable_pyod:bool=True,
+                 args:Arguments,
                  disable_samplers:bool=True,
-                 cv_method:str='random',
                  verbose:int=0
                  ):
 
-        self.args = Arguments()
-        self.args.data_path = data_path
-        self.pyod_detectors = pyod_detectors
-        self.model_names = model_names
-        self.args.n_iter=cv_n_iter
-        self.disable_pyod=disable_pyod
-        self.disable_samplers=disable_samplers
-        self.args.cv_method = cv_method
+        self.args = args
+        self.pyod_detectors = deepcopy(args.pyod_detectors)
+        self.model_names = deepcopy(args.model_names)
+        self.disable_pyod = deepcopy(args.disable_pyod_outliers)
+        self.disable_samplers = disable_samplers
         self.verbose=verbose
+        self.records = []
+        self.count_iter = 0
     
     def sample_cfg_optuna(self, trial, name: str, cfg: dict):
         for k in cfg.keys():
@@ -266,6 +279,8 @@ class Objective(object):
     
         
     def __call__(self, trial):
+        
+        self.count_iter += 1
 
         # select model
         model_name = trial.suggest_categorical(
@@ -315,10 +330,11 @@ class Objective(object):
                 _cfg = {name: self.sample_cfg_optuna(trial, name, HYP_CONFIGS.samplers[name])}
                 self.args.sampler_cfgs.append(_cfg)
 
-        # run cv
+        # run cv and record
         try:
             results = run(args=self.args, save_path=None, verbose=self.verbose)
             score = results[model_name].best_score_
+            self.records.append(results)
         except Exception as e:
             print(e)
             print(results,'\n\n')
@@ -327,71 +343,90 @@ class Objective(object):
         return score
 
 
-def demo(args: Arguments):
-    # sample cfg randomly for debugging
-    if args.sampler_names is not None:
-        args.sampler_cfgs = get_samplers_cfgs(args.sampler_names, HYP_CONFIGS)
-
-    if args.disable_pyod_outliers:
-        args.outliers_det_configs = None
-    else:
-        args.outliers_det_configs = get_pyod_cfgs(args.pyod_detectors, HYP_CONFIGS)
-
-    # run hyperparameter search
-    results = run(args=args, save_path=None, verbose=0)
-
-    return results
-
-
+#%%main
 if __name__ == "__main__":
-    # Debugging
+    
+    #Running
     args = Arguments()
     args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
-    args.model_names = ('logisticReg','decisionTree','linearSVC','svc') #'gradientBoosting','randomForest',)
-    args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
-    args.sampler_names = None # ['SMOTE','nearmiss']
-    args.n_iter = 20
+    
+    args.model_names = ('logisticReg','decisionTree',) #'gradientBoosting','randomForest',)
+    
+    current_time = datetime.now().strftime("%H-%M")
+    
+    args.study_name = "small-models" 
+    
+    args.cv_n_iter = 100
+    args.scoring = 'f1'
+    args.cv_method =  'optuna'
+    args.cv_gap = 1051*5
+    args.n_splits = 5
+    args.n_jobs = 8
+    args.delta_train=50
+    args.delta_delay=7
+    args.delta_test=20
+    
+    args.random_state = 41
+    
     args.disable_pyod_outliers = True
-    args.concat_features=None
+    args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
+    args.pyod_predict_proba_method = 'linear'
+    
+    args.sampler_names = None # ['SMOTE','nearmiss']
+    args.sampler_cfgs = None
+    
+    args.concat_features=('AccountId', 'CUSTOMER_ID')
+    args.concat_features_encoding_kwargs=dict(cat_encoding_method='hashing',
+                                         n_components=14
+                                         )
+    
+    args.add_imputer = False
+    
     args.cat_encoding_method='binary'
-    # args.delta_train
-    # args.delta_delay
-    # args.delta_test
-    # args.random_state
-    # args.windows_size_in_days
-    # args.sampler_names
-    # args.sampler_cfgs
-    # args.pyod_predict_proba_method
-    # args.model_names
-    # args.n_iter
-    # args.cv_gap
-    # args.cv_method
-    # args.n_splits
-    # args.n_jobs
-    # args.scoring
+    args.cat_encoding_hash_n_components=8 # if cat_encoding_method='hashing'
+    args.cat_encoding_base_n=4 # if cat_encoding_method=base_n
+    args.windows_size_in_days = (1, 7, 30)
+     
+    # for debugging
+    # demo(args=args)
+    
+    workdir = Path(r"D:\fraud-detection-galsen\runs-optuna")
+    workdir.mkdir(parents=True,exist_ok=True)
     
     
-    demo(args=args)
 
     # using optuna
-    # study = optuna.create_study(
-    #     direction="maximize",
-    #     sampler=TPESampler(multivariate=True, group=True),
-    #     # study_name="demo",
-    #     load_if_exists=True,
-    #     storage="sqlite:///hypsearch.sql",
-    # )
-    # objective_optuna = Objective(data_path=r"D:\fraud-detection-galsen\data\training.csv",
-    #                              pyod_detectors=('iforest', 'cblof', 'loda', 'knn'),
-    #                              model_names=('logisticReg','decisionTree','svc'),
-    #                              cv_n_iter=100,
-    #                              disable_pyod=True,
-    #                              disable_samplers=True,
-    #                              cv_method='optuna'
-    #                              )
-    # study.optimize(objective_optuna,
-    #                n_trials=100,
-    #                n_jobs=8,
-    #                show_progress_bar=True,
-    #                timeout=60*60*3)
-    # print(study.best_trial)
+    study_name = args.study_name + f"_{str(date.today())}_{current_time}" 
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=TPESampler(multivariate=True, group=True),
+        study_name=study_name,
+        load_if_exists=True,
+        storage="sqlite:///hypsearch.sql",
+    )
+    
+    
+    
+    objective_optuna = Objective(data_path=r"D:\fraud-detection-galsen\data\training.csv",
+                                 pyod_detectors=('iforest', 'cblof', 'loda', 'knn'),
+                                 model_names=('logisticReg','decisionTree','svc'),
+                                 cv_n_iter=100,
+                                 disable_samplers=True,
+                                 )
+    study.optimize(objective_optuna,
+                   n_trials=100,
+                   n_jobs=8,
+                   show_progress_bar=True,
+                   timeout=60*60*3)
+    print(study.best_trial)
+    
+    # save args
+    with open(workdir/(study_name+'.json'),'w') as file:
+        cfg = args.__dict__
+        json.dump(cfg, file,indent=4)
+    
+    # # Save
+    filename = workdir / study_name
+    if filename.exists():
+        filename.with_stem(filename.stem + '_1')
+    joblib.dump(objective_optuna, filename)

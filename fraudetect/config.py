@@ -24,15 +24,19 @@ COLUMNS_TO_STD_SCALE = [
     "TX_DURING_WEEKEND",
     "TX_DURING_NIGHT",
     "Value",
-]
-COLUMNS_TO_ROBUST_SCALE = [
     "TX_AMOUNT",
 ]
+COLUMNS_TO_ROBUST_SCALE = []
 
 
 @dataclass
 class Arguments:
     data_path: str = ""
+    
+    # optuna
+    study_name:str='demo'
+    
+    run_name:str='debug'
 
     # data pre-processing
     delta_train: int = 40
@@ -49,7 +53,7 @@ class Arguments:
     disable_pyod_outliers = False
     cv_n_iter = 20 # for cross validation
     cv_gap = 1051 * 5
-    cv_method = "random"
+    cv_method = "optuna"
     n_splits = 5
     n_jobs = 8
     scoring = "f1"
@@ -58,7 +62,10 @@ class Arguments:
     cat_encoding_hash_method:str='md5'
     cat_encoding_hash_n_components:int=8
     add_imputer:bool=False
-    concat_features = ('AccountId', 'CUSTOMER_ID')
+    concat_features = ('AccountId', 'CUSTOMER_ID') # or None to disable
+    concat_features_encoding_kwargs=dict(cat_encoding_method='hashing',
+                                         n_components=14
+                                         )
 
     # training parameters
     # max_epochs: int = 50

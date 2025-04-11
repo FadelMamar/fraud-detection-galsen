@@ -125,7 +125,7 @@ def hyperparameter_tuning(
                                                           n_jobs=n_jobs,
                                                           study=study,
                                                           scoring=scoring,
-                                                          error_score='raise',
+                                                          # error_score='raise',
                                                           max_iter=10000,
                                                           timeout=60*3,
                                                           n_trials=n_iter,

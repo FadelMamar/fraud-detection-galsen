@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from pyod.models.base import BaseDetector
 import pandas as pd
@@ -118,16 +119,22 @@ def clean_data(
 
 def load_cat_encoding(cat_encoding_method:str,**kwargs):
     
-    cat_encodings = dict()
-    cat_encodings['binary'] = BinaryEncoder(handle_missing='value', drop_invariant=True, handle_unknown='value')
-    cat_encodings['count'] = CountEncoder(handle_missing='value', drop_invariant=True, handle_unknown='value')
-    cat_encodings['hashing'] = HashingEncoder(return_df=False, drop_invariant=True,**kwargs)
-    cat_encodings['base_n'] = BaseNEncoder(return_df=False,handle_missing='value', drop_invariant=True, handle_unknown='value',**kwargs)
+    cat_encodings = ['binary','count','hashing','base_n']
     
-    if cat_encoding_method in cat_encodings.keys():
-        return cat_encodings[cat_encoding_method]
-    else:
-        raise KeyError(f"cat_encoding_method should be in {list(cat_encodings.keys())}")
+    if cat_encoding_method not in cat_encodings:
+        raise KeyError(f"cat_encoding_method should be in {cat_encodings}")
+    
+    if cat_encoding_method == 'binary':
+        return BinaryEncoder(handle_missing='value', drop_invariant=True, handle_unknown='value')
+    
+    elif cat_encoding_method == 'count':
+        return CountEncoder(handle_missing='value', drop_invariant=True, handle_unknown='value')
+    
+    elif cat_encoding_method == 'hashing':
+        return HashingEncoder(return_df=False, drop_invariant=True,**kwargs)
+    
+    elif cat_encoding_method == 'base_n':
+        return BaseNEncoder(return_df=False,handle_missing='value', drop_invariant=True, handle_unknown='value',**kwargs)
 
 
 def build_encoder_scalers(cols_onehot:list, 
@@ -138,6 +145,7 @@ def build_encoder_scalers(cols_onehot:list,
                    add_imputer:bool=False,
                    verbose:bool=False,
                    add_concat_features_transform:bool=False,
+                   concat_features_encoding_kwargs:dict=None,
                    n_jobs=8,
                    **cat_encoding_kwargs
                    ):
@@ -165,15 +173,19 @@ def build_encoder_scalers(cols_onehot:list,
     transformers=[
         ("cat", cat_encoder, cols_cat_encode),
         ("onehot", onehot_encoder, cols_onehot),
-        ("robust", robust_scaler, cols_robust),
-        ("std",std_scaler, cols_std)
+        ("std", std_scaler, cols_std)
     ]
+    
+    if len(cols_robust)>0:
+        transformers.append(("robust", robust_scaler, cols_robust))
+        
     if add_imputer:
         _imputer = [('imputer', imputer, cols_cat_encode + cols_onehot + cols_robust)]
         transformers = _imputer + transformers
         
     if add_concat_features_transform:
-        _enc = Pipeline(steps=[("concat_features", load_cat_encoding('hashing', n_components=16))
+        _enc = Pipeline(steps=[("concat_features", 
+                                load_cat_encoding(**concat_features_encoding_kwargs))
                                 ]
                         )
         _transform = ('concat_features', _enc, ['concat_features',])
@@ -195,7 +207,7 @@ def perform_feature_engineering(
     windows_size_in_days=[1, 7, 30],
     delay_period_accountid: int = 7,
     mode: str = "train",
-    concat_features:list=None,
+    concat_features:Iterable=None,
 ) -> pd.DataFrame:
     """
     Feature engineering function to be used in the pipeline.
@@ -205,11 +217,13 @@ def perform_feature_engineering(
     assert mode in ["train", "test", "val"], (
         "Error: mode should be either 'train' or 'test' or 'val'"
     )
-    if concat_features is not None:
+    assert isinstance(concat_features, Iterable) or (concat_features is None)
+    if concat_features is not None :
+        concat_features = list(concat_features)
         assert len(concat_features)>=2,"At least to columns should be given"
         for col in concat_features:
             assert col in transactions_df.columns
-            
+                
     # clean
     df_data = clean_data(transactions_df)
 
@@ -257,16 +271,19 @@ def perform_feature_engineering(
                 feature="concat_features",
             )
         )
+        
+    # Labels
+    y = df_data["TX_FRAUD"]
     
     # Features
-    X = df_data.drop(columns=["TX_FRAUD"])
+    df_data.drop(columns=["TX_FRAUD"],inplace=True)
+    X = df_data
     
     # Drop unneeded_columns
     if cols_to_drop is not None:
-        X = df_data.drop(columns=cols_to_drop)
+        X.drop(columns=cols_to_drop,inplace=True)
 
-    # Labels
-    y = df_data["TX_FRAUD"]
+    
     
     if mode == "train":        
         X_preprocessed = col_transformer.fit_transform(X)
