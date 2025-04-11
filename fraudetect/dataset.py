@@ -86,7 +86,7 @@ def data_loader(
     n_folds=5,
     random_state=41,
     sampling_ratio=1.0,
-):
+)->tuple:
     # load data
     df_data = load_data(data_path)
 
@@ -104,13 +104,13 @@ def data_loader(
 
     if split_method == "hold-out":
         train_df, val_df = out
-        (X_train, y_train, X_val, y_val), _ = transform_data(
+        (X_train, y_train, X_val, y_val), col_transformer = transform_data(
             train_df=train_df, val_df=val_df, **kwargs_tranform_data
         )
         return X_train, y_train, X_val, y_val
 
     elif split_method == "prequential":
-        (X_train, y_train), _ = transform_data(
+        (X_train, y_train), col_transformer = transform_data(
             train_df=df_data, val_df=None, **kwargs_tranform_data
         )
-        return (X_train, y_train), out
+        return (X_train, y_train), out, col_transformer

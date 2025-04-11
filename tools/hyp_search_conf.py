@@ -27,6 +27,7 @@ from pyod.models.ae1svm import AE1SVM
 from pyod.models.mo_gaal import MO_GAAL
 from collections import OrderedDict
 
+
 # %% data aug - pyod
 outliers_detectors = dict()
 
@@ -186,9 +187,9 @@ outliers_detectors = OrderedDict(
 # %% samplers config
 samplers = dict()
 
-fracs = (np.arange(1, 10) * 4e-3).tolist()
 
 # under sampling
+fracs = (np.arange(1, 5) * 4e-3).tolist()
 samplers["nearmiss"] = dict(
     sampling_strategy=fracs,
     n_neighbors=[3, 5, 7, 9],
@@ -197,6 +198,7 @@ samplers["nearmiss"] = dict(
     sampler=NearMiss,
 )
 # oversampling
+fracs = (np.arange(1, 3) * 4e-3).tolist()
 samplers["SMOTE"] = dict(
     sampling_strategy=fracs, random_state=[41], k_neighbors=[3, 5, 7, 9], sampler=SMOTE
 )

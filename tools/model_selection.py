@@ -6,25 +6,29 @@ Created on Thu Apr 10 16:51:56 2025
 """
 
 # %% funcs & imports
-from fraudetect.modeling.utils import hyperparameter_tuning
-from fraudetect.dataset import data_loader
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.model_selection._search import BaseSearchCV
-from fraudetect.config import (
-    COLUMNS_TO_DROP,
-    COLUMNS_TO_ONE_HOT_ENCODE,
-    COLUMNS_TO_SCALE,
-    Arguments,
-)
-import numpy as np
-from fraudetect.features import load_transforms_pyod
-from fraudetect.sampling import data_resampling
-from fraudetect import import_from_path, sample_cfg
 from collections import OrderedDict
+from collections.abc import Iterable
 import joblib
 import optuna
 from optuna.samplers import TPESampler
-from collections.abc import Iterable
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection._search import BaseSearchCV
+from fraudetect.modeling.utils import hyperparameter_tuning
+from fraudetect.dataset import data_loader
+from fraudetect.config import (
+    COLUMNS_TO_DROP,
+    COLUMNS_TO_ONE_HOT_ENCODE,
+    COLUMNS_TO_CAT_ENCODE,
+    COLUMNS_TO_STD_SCALE,
+    COLUMNS_TO_ROBUST_SCALE,
+    Arguments
+)
+from fraudetect.features import load_transforms_pyod,build_encoder_scalers
+from fraudetect.sampling import data_resampling
+from fraudetect import import_from_path, sample_cfg
+
 
 try:
     HYP_CONFIGS = import_from_path(
@@ -47,14 +51,14 @@ def prepare_data(
     sampler_cfgs: list[dict] = None,
 ):
     # load and transform
-    (X_train, y_train), prequential_split_indices = data_loader(
+    (X_train, y_train), prequential_split_indices, col_transformer = data_loader(
         kwargs_tranform_data=kwargs_tranform_data,
         data_path=data_path,
         split_method="prequential",
         delta_train=delta_train,
         delta_delay=delta_delay,
         delta_test=delta_test,
-        n_folds=5,
+        n_folds=1,# matters if prequential_split_indices are used
         random_state=random_state,
         sampling_ratio=1.0,
     )
@@ -67,7 +71,7 @@ def prepare_data(
         )
         print("Resampled data shape: ", X_train.shape, y_train.shape)
 
-    return X_train, y_train
+    return X_train, y_train, col_transformer
 
 
 def tune_models_hyp(
@@ -91,7 +95,7 @@ def tune_models_hyp(
     best_results = dict()
     for model_name in models_config.keys():
         try:
-            print(f"Hyperparameter tuning for model: {model_name}")
+            print(f"\nHyperparameter tuning for model: {model_name}")
 
             search_engine = hyperparameter_tuning(
                 cv=cv,
@@ -107,9 +111,10 @@ def tune_models_hyp(
             )
             best_results[model_name] = search_engine
 
-            score = search_engine.best_score_
-            print(f"mean {scoring} score for best_estimator: {score:.4f}")
-            print("best params: ", search_engine.best_params_)
+            if verbose:
+                score = search_engine.best_score_
+                print(f"mean {scoring} score for best_estimator: {score:.4f}")
+                print("best params: ", search_engine.best_params_)
 
         except Exception as e:
             print(e)
@@ -124,50 +129,63 @@ def load_models_cfg(names: list[str]):
 
 def run(args: Arguments, save_path: str = None, verbose=0):
     
-    data_path = args.data_path
-    delta_train = args.delta_train
-    delta_delay = args.delta_delay
-    delta_test = args.delta_test
-    random_state = args.random_state
-    windows_size_in_days = args.windows_size_in_days
-    sampler_names = args.sampler_names
-    sampler_cfgs = args.sampler_cfgs
-    pyod_predict_proba_method = args.pyod_predict_proba_method
-    model_names = args.model_names
-    n_iter = args.n_iter
-    cv_gap = args.cv_gap
-    cv_method = args.cv_method
-    n_splits = args.n_splits
-    n_jobs = args.n_jobs
-    scoring = args.scoring
+        
+    if args.cat_encoding_method == 'hashing':
+        kwargs = dict(n_components=args.cat_encoding_hash_n_components,
+                      hash_method=args.cat_encoding_hash_method
+                      )
+    elif args.cat_encoding_method == 'base_n':
+        kwargs = dict(base=args.cat_encoding_base_n,
+                      )
+    else:
+        kwargs = dict()
 
-    # load data & do basic preprocessing
+    # load data & do preprocessing
+    col_transformer = build_encoder_scalers(cols_onehot=COLUMNS_TO_ONE_HOT_ENCODE,
+                                            cols_cat_encode=COLUMNS_TO_CAT_ENCODE,
+                                            cols_std=COLUMNS_TO_STD_SCALE,
+                                            cols_robust=COLUMNS_TO_ROBUST_SCALE,
+                                            cat_encoding_method=args.cat_encoding_method,
+                                            add_imputer=args.add_imputer,
+                                            verbose=bool(verbose),
+                                            add_concat_features_transform=args.concat_features is not None,
+                                            n_jobs=args.n_jobs,
+                                            **kwargs
+                                            )
     kwargs_tranform_data = dict(
-        columns_to_drop=COLUMNS_TO_DROP,
-        columns_to_onehot_encode=COLUMNS_TO_ONE_HOT_ENCODE,
-        columns_to_scale=COLUMNS_TO_SCALE,
-        windows_size_in_days=windows_size_in_days,
+        col_transformer=col_transformer,
+        cols_to_drop=COLUMNS_TO_DROP,
+        windows_size_in_days=args.windows_size_in_days,
         train_transform=None,  # some custom transform applied to X_train,y_train
         val_transform=None,  # some custom transform applied to X_val,y_val
-        delay_period_accountid=delta_delay,
+        delay_period_accountid=args.delta_delay,
+        concat_features=args.concat_features
     )
-    X_train, y_train = prepare_data(
-        data_path=data_path,
-        kwargs_tranform_data=kwargs_tranform_data,
-        delta_train=delta_train,
-        delta_delay=delta_delay,
-        delta_test=delta_test,
-        random_state=random_state,
-        sampler_names=sampler_names,
-        sampler_cfgs=sampler_cfgs,
-    )
+    X_train, y_train, col_transformer = prepare_data(
+                                        data_path=args.data_path,
+                                        kwargs_tranform_data=kwargs_tranform_data,
+                                        delta_train=args.delta_train,
+                                        delta_delay=args.delta_delay,
+                                        delta_test=args.delta_test,
+                                        random_state=args.random_state,
+                                        sampler_names=args.sampler_names,
+                                        sampler_cfgs=args.sampler_cfgs,
+                                    )
+    
+    # transformed column names
+    columns_of_transformed_data = list(
+                                        map(lambda name: name.split('__')[1],
+                                            list(col_transformer.get_feature_names_out())))
+    df_train_preprocessed = pd.DataFrame(X_train, columns=columns_of_transformed_data)
 
     # load pyod transform and apply it to X_train
     if args.outliers_det_configs is not None:
         transform = load_transforms_pyod(
             X_train=X_train,
             outliers_det_configs=args.outliers_det_configs,
-            method=pyod_predict_proba_method,
+            method=args.pyod_predict_proba_method,
+            add_confidence=False,
+            fitted_detector_list=None,
         )
         X_train = transform(X=X_train)
 
@@ -175,14 +193,14 @@ def run(args: Arguments, save_path: str = None, verbose=0):
     best_results = tune_models_hyp(
         X_train,
         y_train,
-        models_config=load_models_cfg(names=model_names),
-        n_splits=n_splits,
-        gap=cv_gap,
-        n_iter=n_iter,
-        scoring=scoring,
+        models_config=load_models_cfg(names=args.model_names),
+        n_splits=args.n_splits,
+        gap=args.cv_gap,
+        n_iter=args.cv_n_iter,
+        scoring=args.scoring,
         verbose=verbose,
-        n_jobs=n_jobs,
-        method=cv_method,
+        n_jobs=args.n_jobs,
+        method=args.cv_method,
     )
     # save results
     if save_path:
@@ -275,11 +293,10 @@ class Objective(object):
         # samplers
         self.args.sampler_cfgs = None
         self.args.sampler_names = None
-        if trial.suggest_categorical("disable_samplers", [True, self.disable_samplers]):
-            pass
-        else:
+        if not trial.suggest_categorical("disable_samplers", 
+                                         [True, self.disable_samplers]):
             conbimed_sampler = trial.suggest_categorical(
-                "conbined_sampler", HYP_CONFIGS.combinedsamplers + [None,]
+                "conbined_sampler", HYP_CONFIGS.combinedsamplers + [None,]*len(HYP_CONFIGS.combinedsamplers)
             )
             sampler_names = [conbimed_sampler]
             if conbimed_sampler is None:
@@ -328,34 +345,53 @@ def demo(args: Arguments):
 
 if __name__ == "__main__":
     # Debugging
-    # args = Arguments()
-    # args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
-    # args.model_names = ('logisticReg','decisionTree','linearSVC','svc') #'gradientBoosting','randomForest',)
-    # args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
-    # args.sampler_names = ['SMOTE','nearmiss']
-    # args.n_iter = 100
-    # args.disable_pyod_outliers = True
-    # demo(args=args)
+    args = Arguments()
+    args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
+    args.model_names = ('logisticReg','decisionTree','linearSVC','svc') #'gradientBoosting','randomForest',)
+    args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
+    args.sampler_names = None # ['SMOTE','nearmiss']
+    args.n_iter = 20
+    args.disable_pyod_outliers = True
+    args.concat_features=None
+    args.cat_encoding_method='binary'
+    # args.delta_train
+    # args.delta_delay
+    # args.delta_test
+    # args.random_state
+    # args.windows_size_in_days
+    # args.sampler_names
+    # args.sampler_cfgs
+    # args.pyod_predict_proba_method
+    # args.model_names
+    # args.n_iter
+    # args.cv_gap
+    # args.cv_method
+    # args.n_splits
+    # args.n_jobs
+    # args.scoring
+    
+    
+    demo(args=args)
 
     # using optuna
-    study = optuna.create_study(
-        direction="maximize",
-        sampler=TPESampler(multivariate=True, group=True),
-        # study_name="demo",
-        load_if_exists=True,
-        storage="sqlite:///hypsearch.sql",
-    )
-    objective_optuna = Objective(data_path=r"D:\fraud-detection-galsen\data\training.csv",
-                                 pyod_detectors=('iforest', 'cblof', 'loda', 'knn'),
-                                 model_names=('logisticReg','decisionTree','svc'),
-                                 cv_n_iter=100,
-                                 disable_pyod=True,
-                                 disable_samplers=True,
-                                 cv_method='optuna'
-                                 )
-    study.optimize(objective_optuna,
-                   n_trials=100,
-                   n_jobs=8,
-                   show_progress_bar=True,
-                   timeout=60*60*3)
-    print(study.best_trial)
+    # study = optuna.create_study(
+    #     direction="maximize",
+    #     sampler=TPESampler(multivariate=True, group=True),
+    #     # study_name="demo",
+    #     load_if_exists=True,
+    #     storage="sqlite:///hypsearch.sql",
+    # )
+    # objective_optuna = Objective(data_path=r"D:\fraud-detection-galsen\data\training.csv",
+    #                              pyod_detectors=('iforest', 'cblof', 'loda', 'knn'),
+    #                              model_names=('logisticReg','decisionTree','svc'),
+    #                              cv_n_iter=100,
+    #                              disable_pyod=True,
+    #                              disable_samplers=True,
+    #                              cv_method='optuna'
+    #                              )
+    # study.optimize(objective_optuna,
+    #                n_trials=100,
+    #                n_jobs=8,
+    #                show_progress_bar=True,
+    #                timeout=60*60*3)
+    # print(study.best_trial)

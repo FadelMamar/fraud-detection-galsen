@@ -6,6 +6,12 @@ from tqdm import tqdm
 from collections import OrderedDict
 from functools import partial
 from .detectors import get_detector, instantiate_detector
+from category_encoders import BinaryEncoder, CountEncoder, HashingEncoder,BaseNEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import KNNImputer
+from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
+from sklearn.pipeline import Pipeline
+
 
 
 def get_customer_spending_behaviour_features(
@@ -97,36 +103,114 @@ def get_count_risk_rolling_window(
 
 def clean_data(
     df_data: pd.DataFrame,
+    drop_all_na:bool=False
 ) -> pd.DataFrame:
     """
     Clean the data by dropping NA rows and duplicated rows
     """
     df = df_data.copy()
     df.drop_duplicates(inplace=True)
-    df.dropna(axis=0, how="any", inplace=True)
+    if drop_all_na:
+        df.dropna(axis=0, how="any", inplace=True)
 
     return df
 
 
+def load_cat_encoding(cat_encoding_method:str,**kwargs):
+    
+    cat_encodings = dict()
+    cat_encodings['binary'] = BinaryEncoder(handle_missing='value', drop_invariant=True, handle_unknown='value')
+    cat_encodings['count'] = CountEncoder(handle_missing='value', drop_invariant=True, handle_unknown='value')
+    cat_encodings['hashing'] = HashingEncoder(return_df=False, drop_invariant=True,**kwargs)
+    cat_encodings['base_n'] = BaseNEncoder(return_df=False,handle_missing='value', drop_invariant=True, handle_unknown='value',**kwargs)
+    
+    if cat_encoding_method in cat_encodings.keys():
+        return cat_encodings[cat_encoding_method]
+    else:
+        raise KeyError(f"cat_encoding_method should be in {list(cat_encodings.keys())}")
+
+
+def build_encoder_scalers(cols_onehot:list, 
+                   cols_cat_encode:list,
+                   cat_encoding_method:str,
+                   cols_std:list,
+                   cols_robust:list,
+                   add_imputer:bool=False,
+                   verbose:bool=False,
+                   add_concat_features_transform:bool=False,
+                   n_jobs=8,
+                   **cat_encoding_kwargs
+                   ):
+    
+    # Imputer
+    imputer =  Pipeline(steps=[('imputer', KNNImputer(n_neighbors=5))
+                             ]
+                        )
+    # cat variables
+    onehot_encoder = Pipeline(steps=[
+                                    ("onehot", OneHotEncoder())
+                                ]
+                            )
+    cat_encoder = Pipeline(steps=[
+                                ("cat_encode", load_cat_encoding(cat_encoding_method,**cat_encoding_kwargs))
+                            ]
+                        )
+    # numeric variables
+    robust_scaler = Pipeline(steps=[ ("robust", RobustScaler())],
+                             )
+    std_scaler = Pipeline(steps=[("standard", StandardScaler())],
+                        )
+    
+    # compose encoders and scalers in a column transformer
+    transformers=[
+        ("cat", cat_encoder, cols_cat_encode),
+        ("onehot", onehot_encoder, cols_onehot),
+        ("robust", robust_scaler, cols_robust),
+        ("std",std_scaler, cols_std)
+    ]
+    if add_imputer:
+        _imputer = [('imputer', imputer, cols_cat_encode + cols_onehot + cols_robust)]
+        transformers = _imputer + transformers
+        
+    if add_concat_features_transform:
+        _enc = Pipeline(steps=[("concat_features", load_cat_encoding('hashing', n_components=16))
+                                ]
+                        )
+        _transform = ('concat_features', _enc, ['concat_features',])
+        transformers.append(_transform)
+         
+    transformer = ColumnTransformer(transformers, 
+                                    remainder="passthrough",
+                                    n_jobs=n_jobs,
+                                    verbose=verbose
+                                    )
+    
+    return transformer
+
+
 def perform_feature_engineering(
-    transactions_df,
-    columns_to_drop: list,
-    columns_to_onehot_encode: list,
-    onehot_encoder: OneHotEncoder,
-    scaler: StandardScaler,
+    transactions_df:pd.DataFrame,
+    col_transformer:ColumnTransformer,
+    cols_to_drop:list|None,
     windows_size_in_days=[1, 7, 30],
     delay_period_accountid: int = 7,
-    columns_to_scale: list = None,
     mode: str = "train",
+    concat_features:list=None,
 ) -> pd.DataFrame:
     """
     Feature engineering function to be used in the pipeline.
     """
-
+    
+    # checks
     assert mode in ["train", "test", "val"], (
         "Error: mode should be either 'train' or 'test' or 'val'"
     )
-
+    if concat_features is not None:
+        assert len(concat_features)>=2,"At least to columns should be given"
+        for col in concat_features:
+            assert col in transactions_df.columns
+            
+    # clean
     df_data = clean_data(transactions_df)
 
     # create TX_TIME_DAYS column
@@ -136,7 +220,9 @@ def perform_feature_engineering(
     # TX_DURING_WEEKEND
     df_data["TX_DURING_WEEKEND"] = (df_data["TX_DATETIME"].dt.dayofweek > 4) * 1
     # TX_DURING_NIGHT
-    df_data["TX_DURING_NIGHT"] = (df_data["TX_DATETIME"].dt.hour < 6) * 1
+    df_data["TX_DURING_NIGHT"] = (df_data["TX_DATETIME"].dt.hour < 6) * 1 + (df_data["TX_DATETIME"].dt.hour > 18) * 1
+    # TX_HOUR
+    df_data["TX_HOUR"] = df_data["TX_DATETIME"].dt.hour
 
     # Customer ID transformation
     df_data = df_data.groupby("CUSTOMER_ID").apply(
@@ -156,108 +242,93 @@ def perform_feature_engineering(
         )
     )
     df_data = df_data.sort_values("TX_DATETIME").reset_index(drop=True)
-
+    
+    # concat_features
+    if concat_features is not None:
+        df_data['concat_features'] = df_data[concat_features].apply(lambda x: "+".join(x),
+                                                                    axis=1,
+                                                                    raw=False,
+                                                                    result_type='reduce')
+        df_data = df_data.groupby("concat_features").apply(
+            lambda x: get_count_risk_rolling_window(
+                x,
+                delay_period=delay_period_accountid,
+                windows_size_in_days=windows_size_in_days,
+                feature="concat_features",
+            )
+        )
+    
     # Features
     X = df_data.drop(columns=["TX_FRAUD"])
+    
+    # Drop unneeded_columns
+    if cols_to_drop is not None:
+        X = df_data.drop(columns=cols_to_drop)
 
     # Labels
     y = df_data["TX_FRAUD"]
-
-    # get features for scaling and encoding
-    X_one_hot = X[columns_to_onehot_encode].astype(str)
-
-    if columns_to_scale is None:
-        X_scale = X.drop(columns=columns_to_onehot_encode + columns_to_drop).astype(
-            float
-        )
-        columns_to_scale = []
-    else:
-        X_scale = X[columns_to_scale].astype(float)
-
-    # drop the columns that are not needed anymore
-    X.drop(
-        columns=columns_to_onehot_encode + columns_to_scale + columns_to_drop,
-        inplace=True,
-    )
-
-    if mode == "train":
-        # Fit on the training data
-        X_one_hot = onehot_encoder.fit_transform(X_one_hot)
-        X_scaled = scaler.fit_transform(X_scale)
-        assert len(onehot_encoder.categories_) == len(columns_to_onehot_encode), (
-            "Error: Number of categories in one-hot encoder does not match the number of columns to one-hot encode. Set drop=None in the encoder."
-        )
-        assert (
-            df_data.nunique().loc[columns_to_onehot_encode].sum() == X_one_hot.shape[1]
-        ), (
-            "Error: Number of unique values in one-hot encoded columns does not match the number of columns to one-hot encode."
-        )
-
+    
+    if mode == "train":        
+        X_preprocessed = col_transformer.fit_transform(X)
     else:
         # Transform the test/val data
-        X_one_hot = onehot_encoder.transform(X_one_hot)
-        X_scaled = scaler.transform(X_scale)
-
-    # Concatenate the one-hot encoded features with the scaled features
-    if X.empty:
-        X_preprocessed = np.hstack([X_one_hot, X_scaled])
-    else:
-        X_preprocessed = np.hstack([X_one_hot, X_scaled, X.to_numpy()])
-
-    # check total numer of features
+        X_preprocessed = col_transformer.transform(X)
+    
+    # columns_of_transformed_data = list(
+    #     map(lambda name: name.split('__')[1],
+    #         list(col_transformer.get_feature_names_out())
+    #     )
+    # )
+           
 
     return X_preprocessed, y
 
+#TODO: fits feature selector on df_train
+def feature_selector(df_train,)->callable:
+     
+    pass
 
 def transform_data(
     train_df: pd.DataFrame,
     val_df: pd.DataFrame | None,
-    columns_to_drop: str,
-    columns_to_onehot_encode: str,
-    columns_to_scale: str,
+    col_transformer:ColumnTransformer,
+    cols_to_drop:list|None,
     train_transform=None,
     val_transform=None,
     delay_period_accountid: int = 7,
     windows_size_in_days=[1, 7, 30],
+    concat_features:list=None
 ) -> tuple:
-    # scaler and encoders
-    onehot_encoder = OneHotEncoder(
-        sparse_output=False, handle_unknown="ignore", drop=None, dtype=np.float64
-    )
-    scaler = StandardScaler()
-
+    
+    
     X_train, y_train = perform_feature_engineering(
         train_df,
-        columns_to_drop=columns_to_drop,
-        columns_to_onehot_encode=columns_to_onehot_encode,
-        columns_to_scale=columns_to_scale,
-        onehot_encoder=onehot_encoder,
-        scaler=scaler,
+        col_transformer=col_transformer,
+        cols_to_drop=cols_to_drop,
         mode="train",
         delay_period_accountid=delay_period_accountid,
         windows_size_in_days=windows_size_in_days,
+        concat_features=concat_features
     )
     if train_transform is not None:
         X_train, y_train = train_transform(X_train, y_train)
 
     if val_df is None:
-        return (X_train, y_train), (onehot_encoder, scaler)
+        return (X_train, y_train), col_transformer
 
     X_val, y_val = perform_feature_engineering(
         val_df,
-        columns_to_drop=columns_to_drop,
-        columns_to_onehot_encode=columns_to_onehot_encode,
-        columns_to_scale=columns_to_scale,
-        onehot_encoder=onehot_encoder,
-        scaler=scaler,
+        col_transformer=col_transformer,
+        cols_to_drop=cols_to_drop,
         mode="val",
         delay_period_accountid=delay_period_accountid,
         windows_size_in_days=windows_size_in_days,
+        concat_features=concat_features
     )
     if val_transform is not None:
         X_val, y_val = val_transform(X_val, y_val)
 
-    return (X_train, y_train, X_val, y_val), (onehot_encoder, scaler)
+    return (X_train, y_train, X_val, y_val), col_transformer
 
 
 def fit_outliers_detectors(

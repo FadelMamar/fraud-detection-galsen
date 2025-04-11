@@ -14,16 +14,20 @@ COLUMNS_TO_DROP = [
 COLUMNS_TO_ONE_HOT_ENCODE = [
     "PricingStrategy",
     "ChannelId",
-    "ProductCategory",
     "ProviderId",
+]
+COLUMNS_TO_CAT_ENCODE = [
+    "ProductCategory",
     "ProductId",
 ]
-COLUMNS_TO_SCALE = [
+COLUMNS_TO_STD_SCALE = [
     "TX_DURING_WEEKEND",
     "TX_DURING_NIGHT",
-    "TX_AMOUNT",
     "Value",
-]  # or None to select all numeric columns
+]
+COLUMNS_TO_ROBUST_SCALE = [
+    "TX_AMOUNT",
+]
 
 
 @dataclass
@@ -43,12 +47,18 @@ class Arguments:
     model_names = ("sgdClassifier", "xgboost", "randomForest", "histGradientBoosting")
     pyod_detectors = ("iforest", "cblof", "loda", "knn")
     disable_pyod_outliers = False
-    n_iter = 20
+    cv_n_iter = 20 # for cross validation
     cv_gap = 1051 * 5
     cv_method = "random"
     n_splits = 5
     n_jobs = 8
     scoring = "f1"
+    cat_encoding_method:str='binary' # count, binary, base_n, hashing
+    cat_encoding_base_n:int=4
+    cat_encoding_hash_method:str='md5'
+    cat_encoding_hash_n_components:int=8
+    add_imputer:bool=False
+    concat_features = ('AccountId', 'CUSTOMER_ID')
 
     # training parameters
     # max_epochs: int = 50

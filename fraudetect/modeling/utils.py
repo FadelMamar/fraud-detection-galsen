@@ -1,6 +1,7 @@
+# from sklearn.experimental import enable_halving_search_cv
 from sklearn.model_selection import (
     GridSearchCV,
-    HalvingRandomSearchCV,
+    # HalvingRandomSearchCV,
     RandomizedSearchCV,
 )
 from sklearn.model_selection._search import BaseSearchCV
@@ -85,17 +86,17 @@ def hyperparameter_tuning(
             verbose=verbose,
         )
 
-    elif method == "halving":
-        search_engine = HalvingRandomSearchCV(
-            model(),
-            param_distributions=model_cfg,
-            scoring=scoring,
-            cv=cv,
-            refit=True,
-            n_jobs=n_jobs,
-            random_state=41,
-            verbose=verbose,
-        )
+    # elif method == "halving":
+        # search_engine = HalvingRandomSearchCV(
+        #     model(),
+        #     param_distributions=model_cfg,
+        #     scoring=scoring,
+        #     cv=cv,
+        #     refit=True,
+        #     n_jobs=n_jobs,
+        #     random_state=41,
+        #     verbose=verbose,
+        # )
 
     elif method == "random":
         search_engine = RandomizedSearchCV(
@@ -124,6 +125,7 @@ def hyperparameter_tuning(
                                                           n_jobs=n_jobs,
                                                           study=study,
                                                           scoring=scoring,
+                                                          error_score='raise',
                                                           max_iter=10000,
                                                           timeout=60*3,
                                                           n_trials=n_iter,
@@ -135,7 +137,7 @@ def hyperparameter_tuning(
 
     else:
         raise ValueError(
-            "Invalid method. Choose either 'gridsearch', 'optuna', 'halving' or 'random'."
+            "Invalid method. Choose either 'gridsearch', 'optuna' or 'random'."
         )
 
     search_engine.fit(X_train, y_train)
