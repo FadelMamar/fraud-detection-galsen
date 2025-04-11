@@ -391,6 +391,7 @@ def load_transforms_pyod(
     method: str = "unify",
     add_confidence: bool = False,
     fitted_detector_list: list[BaseDetector] = None,
+    return_fitted_models:bool=False
 ):
     if fitted_detector_list is not None:
         return partial(
@@ -421,5 +422,8 @@ def load_transforms_pyod(
         method=method,
         add_confidence=add_confidence,
     )
-
+    
+    if return_fitted_models:
+        return transform_func, model_list
+    
     return transform_func

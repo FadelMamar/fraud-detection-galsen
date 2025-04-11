@@ -44,7 +44,7 @@ except:
     )
 
 
-def prepare_data(
+def __prepare_data(
     data_path: str,
     kwargs_tranform_data: dict,
     delta_train=40,
@@ -77,6 +77,75 @@ def prepare_data(
 
     return X_train, y_train, col_transformer
 
+def build_dataset(args: Arguments, verbose=0):
+    
+    if args.cat_encoding_method == 'hashing':
+        kwargs = dict(n_components=args.cat_encoding_hash_n_components,
+                      hash_method=args.cat_encoding_hash_method
+                      )
+    elif args.cat_encoding_method == 'base_n':
+        kwargs = dict(base=args.cat_encoding_base_n,
+                      )
+    else:
+        kwargs = dict()
+
+    # load data & do preprocessing
+    col_transformer = build_encoder_scalers(cols_onehot=COLUMNS_TO_ONE_HOT_ENCODE,
+                                            cols_cat_encode=COLUMNS_TO_CAT_ENCODE,
+                                            cols_std=COLUMNS_TO_STD_SCALE,
+                                            cols_robust=COLUMNS_TO_ROBUST_SCALE,
+                                            cat_encoding_method=args.cat_encoding_method,
+                                            add_imputer=args.add_imputer,
+                                            verbose=bool(verbose),
+                                            add_concat_features_transform=args.concat_features is not None,
+                                            n_jobs=args.n_jobs,
+                                            concat_features_encoding_kwargs=args.concat_features_encoding_kwargs,
+                                            **kwargs
+                                            )
+    kwargs_tranform_data = dict(
+        col_transformer=col_transformer,
+        cols_to_drop=COLUMNS_TO_DROP,
+        windows_size_in_days=args.windows_size_in_days,
+        train_transform=None,  # some custom transform applied to X_train,y_train
+        val_transform=None,  # some custom transform applied to X_val,y_val
+        delay_period_accountid=args.delta_delay,
+        concat_features=args.concat_features
+    )
+    X_train, y_train, col_transformer = __prepare_data(
+                                        data_path=args.data_path,
+                                        kwargs_tranform_data=kwargs_tranform_data,
+                                        delta_train=args.delta_train,
+                                        delta_delay=args.delta_delay,
+                                        delta_test=args.delta_test,
+                                        random_state=args.random_state,
+                                        sampler_names=args.sampler_names,
+                                        sampler_cfgs=args.sampler_cfgs,
+                                    )
+    
+    # transformed column names
+    # columns_of_transformed_data = list(map(lambda name: name.split('__')[1],
+    #                                         list(col_transformer.get_feature_names_out()))
+    #                                     )
+    columns_of_transformed_data = col_transformer.get_feature_names_out()
+    df_train_preprocessed = pd.DataFrame(X_train, columns=columns_of_transformed_data)
+    
+    print("X_train_preprocessed columns: ", df_train_preprocessed.columns)
+    
+    # load pyod transform and apply it to X_train
+    transform_pyod = None
+    fitted_models_pyod = None
+    if args.outliers_det_configs is not None:
+        transform_pyod, fitted_models_pyod = load_transforms_pyod(
+            X_train=X_train,
+            outliers_det_configs=args.outliers_det_configs,
+            method=args.pyod_predict_proba_method,
+            add_confidence=False,
+            fitted_detector_list=None,
+            return_fitted_models=True
+        )
+        X_train = transform_pyod(X=X_train)
+    
+    return (X_train, y_train), col_transformer, fitted_models_pyod
 
 def tune_models_hyp(
     X_train: np.ndarray,
@@ -126,75 +195,12 @@ def tune_models_hyp(
 
     return best_results
 
-
 def load_models_cfg(names: list[str]):
     return {name: HYP_CONFIGS.models[name] for name in names}
 
 
-def run(args: Arguments, save_path: str = None, verbose=0):
+def run(args: Arguments, X_train, y_train, save_path: str = None, verbose=0):
     
-        
-    if args.cat_encoding_method == 'hashing':
-        kwargs = dict(n_components=args.cat_encoding_hash_n_components,
-                      hash_method=args.cat_encoding_hash_method
-                      )
-    elif args.cat_encoding_method == 'base_n':
-        kwargs = dict(base=args.cat_encoding_base_n,
-                      )
-    else:
-        kwargs = dict()
-
-    # load data & do preprocessing
-    col_transformer = build_encoder_scalers(cols_onehot=COLUMNS_TO_ONE_HOT_ENCODE,
-                                            cols_cat_encode=COLUMNS_TO_CAT_ENCODE,
-                                            cols_std=COLUMNS_TO_STD_SCALE,
-                                            cols_robust=COLUMNS_TO_ROBUST_SCALE,
-                                            cat_encoding_method=args.cat_encoding_method,
-                                            add_imputer=args.add_imputer,
-                                            verbose=bool(verbose),
-                                            add_concat_features_transform=args.concat_features is not None,
-                                            n_jobs=args.n_jobs,
-                                            concat_features_encoding_kwargs=args.concat_features_encoding_kwargs,
-                                            **kwargs
-                                            )
-    kwargs_tranform_data = dict(
-        col_transformer=col_transformer,
-        cols_to_drop=COLUMNS_TO_DROP,
-        windows_size_in_days=args.windows_size_in_days,
-        train_transform=None,  # some custom transform applied to X_train,y_train
-        val_transform=None,  # some custom transform applied to X_val,y_val
-        delay_period_accountid=args.delta_delay,
-        concat_features=args.concat_features
-    )
-    X_train, y_train, col_transformer = prepare_data(
-                                        data_path=args.data_path,
-                                        kwargs_tranform_data=kwargs_tranform_data,
-                                        delta_train=args.delta_train,
-                                        delta_delay=args.delta_delay,
-                                        delta_test=args.delta_test,
-                                        random_state=args.random_state,
-                                        sampler_names=args.sampler_names,
-                                        sampler_cfgs=args.sampler_cfgs,
-                                    )
-    
-    # transformed column names
-    # columns_of_transformed_data = list(map(lambda name: name.split('__')[1],
-    #                                         list(col_transformer.get_feature_names_out()))
-    #                                     )
-    columns_of_transformed_data = col_transformer.get_feature_names_out()
-    df_train_preprocessed = pd.DataFrame(X_train, columns=columns_of_transformed_data)
-
-    # load pyod transform and apply it to X_train
-    if args.outliers_det_configs is not None:
-        transform = load_transforms_pyod(
-            X_train=X_train,
-            outliers_det_configs=args.outliers_det_configs,
-            method=args.pyod_predict_proba_method,
-            add_confidence=False,
-            fitted_detector_list=None,
-        )
-        X_train = transform(X=X_train)
-
     # tune models
     best_results = tune_models_hyp(
         X_train,
@@ -208,6 +214,7 @@ def run(args: Arguments, save_path: str = None, verbose=0):
         n_jobs=args.n_jobs,
         method=args.cv_method,
     )
+        
     # save results
     if save_path:
         joblib.dump(best_results, save_path)
@@ -237,7 +244,7 @@ def get_pyod_cfgs(names, configs):
     return OrderedDict(outliers_det_configs)
 
 
-def demo(args: Arguments):
+def demo(args: Arguments,verbose=0):
     # sample cfg randomly for debugging
     if args.sampler_names is not None:
         args.sampler_cfgs = get_samplers_cfgs(args.sampler_names, HYP_CONFIGS)
@@ -248,7 +255,12 @@ def demo(args: Arguments):
         args.outliers_det_configs = get_pyod_cfgs(args.pyod_detectors, HYP_CONFIGS)
 
     # run hyperparameter search
-    results = run(args=args, save_path=None, verbose=0)
+    (X_train, y_train), col_transformer, fitted_models_pyod = build_dataset(args=args,verbose=verbose)
+    results = run(args=args,
+                  X_train=X_train,
+                  y_train=y_train,
+                  save_path=None,
+                  verbose=verbose)
 
     return results
 
@@ -269,6 +281,8 @@ class Objective(object):
         self.verbose=verbose
         self.records = []
         self.count_iter = 0
+        
+        (self.X_train, self.y_train), self.col_transformer, self.fitted_models_pyod = build_dataset(args=args,verbose=verbose)
     
     def sample_cfg_optuna(self, trial, name: str, cfg: dict):
         for k in cfg.keys():
@@ -276,8 +290,7 @@ class Objective(object):
                 continue
             cfg[k] = trial.suggest_categorical(name + "__" + k, cfg[k])
         return cfg
-    
-        
+          
     def __call__(self, trial):
         
         self.count_iter += 1
@@ -332,7 +345,11 @@ class Objective(object):
 
         # run cv and record
         try:
-            results = run(args=self.args, save_path=None, verbose=self.verbose)
+            results = run(args=self.args,
+                          X_train=self.X_train,
+                          y_train=self.y_train,
+                          save_path=None,
+                          verbose=self.verbose)
             score = results[model_name].best_score_
             self.records.append(results)
         except Exception as e:
@@ -350,7 +367,7 @@ if __name__ == "__main__":
     args = Arguments()
     args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
     
-    args.model_names = ('logisticReg','decisionTree',) #'gradientBoosting','randomForest',)
+    args.model_names = ('randomForest',) #'gradientBoosting','randomForest',)
     
     current_time = datetime.now().strftime("%H-%M")
     
@@ -391,9 +408,7 @@ if __name__ == "__main__":
     # demo(args=args)
     
     workdir = Path(r"D:\fraud-detection-galsen\runs-optuna")
-    workdir.mkdir(parents=True,exist_ok=True)
-    
-    
+    workdir.mkdir(parents=True,exist_ok=True)   
 
     # using optuna
     study_name = args.study_name + f"_{str(date.today())}_{current_time}" 
@@ -405,13 +420,9 @@ if __name__ == "__main__":
         storage="sqlite:///hypsearch.sql",
     )
     
-    
-    
-    objective_optuna = Objective(data_path=r"D:\fraud-detection-galsen\data\training.csv",
-                                 pyod_detectors=('iforest', 'cblof', 'loda', 'knn'),
-                                 model_names=('logisticReg','decisionTree','svc'),
-                                 cv_n_iter=100,
+    objective_optuna = Objective(args=args,
                                  disable_samplers=True,
+                                 verbose=0
                                  )
     study.optimize(objective_optuna,
                    n_trials=100,
@@ -425,7 +436,7 @@ if __name__ == "__main__":
         cfg = args.__dict__
         json.dump(cfg, file,indent=4)
     
-    # # Save
+    # Save object
     filename = workdir / study_name
     if filename.exists():
         filename.with_stem(filename.stem + '_1')
