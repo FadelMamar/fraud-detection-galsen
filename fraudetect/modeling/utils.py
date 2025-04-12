@@ -1,7 +1,5 @@
-# from sklearn.experimental import enable_halving_search_cv
 from sklearn.model_selection import (
     GridSearchCV,
-    # HalvingRandomSearchCV,
     RandomizedSearchCV,
 )
 from sklearn.model_selection._search import BaseSearchCV
@@ -86,18 +84,6 @@ def hyperparameter_tuning(
             verbose=verbose,
         )
 
-    # elif method == "halving":
-    # search_engine = HalvingRandomSearchCV(
-    #     model,
-    #     param_distributions=params_config,
-    #     scoring=scoring,
-    #     cv=cv,
-    #     refit=True,
-    #     n_jobs=n_jobs,
-    #     random_state=41,
-    #     verbose=verbose,
-    # )
-
     elif method == "random":
         search_engine = RandomizedSearchCV(
             model,
@@ -119,11 +105,15 @@ def hyperparameter_tuning(
         )
         param_dist = dict()
         for k, v in params_config.items():
-            if isinstance(v,Iterable):
-                param_dist[k]=optuna.distributions.CategoricalDistribution(v)
+            if isinstance(v, Iterable):
+                param_dist[k] = optuna.distributions.CategoricalDistribution(v)
             else:
-                param_dist[k]=optuna.distributions.CategoricalDistribution([v,])
-        
+                param_dist[k] = optuna.distributions.CategoricalDistribution(
+                    [
+                        v,
+                    ]
+                )
+
         search_engine = optuna.integration.OptunaSearchCV(
             model,
             param_distributions=param_dist,
@@ -141,21 +131,23 @@ def hyperparameter_tuning(
         )
 
     elif method == "hyperopt":
-        loss_fn = lambda y_true,y_pred: 1. - f1_score(y_true=y_true,
-                                                 y_pred=y_pred,
-                                                 pos_label=1,
-                                                 zero_division=1,
-                                                )
-        search_engine = HyperoptEstimator(classifier=model,
-                                          algo=tpe.suggest,
-                                          max_evals=n_iter,
-                                          loss_fn=loss_fn,
-                                          n_jobs=n_jobs,
-                                          trial_timeout=60*2,
-                                          )
+        loss_fn = lambda y_true, y_pred: 1.0 - f1_score(
+            y_true=y_true,
+            y_pred=y_pred,
+            pos_label=1,
+            zero_division=1,
+        )
+        search_engine = HyperoptEstimator(
+            classifier=model,
+            algo=tpe.suggest,
+            max_evals=n_iter,
+            loss_fn=loss_fn,
+            n_jobs=n_jobs,
+            trial_timeout=60 * 2,
+        )
     else:
         raise ValueError(
-            "Invalid method. Choose either 'gridsearch', 'optuna' or 'random'."
+            "Invalid method. Choose either 'gridsearch',hyperopt, 'optuna' or 'random'."
         )
 
     search_engine.fit(X_train, y_train)

@@ -13,6 +13,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
+import os
 import joblib
 import json
 import optuna
@@ -187,7 +188,7 @@ def augment_resample_dataset(
     return (X, y), fitted_models_pyod
 
 
-def tune_models_hyp(
+def __tune_models_hyp(
     X_train: np.ndarray,
     y_train: np.ndarray,
     models_config: dict,
@@ -236,20 +237,24 @@ def tune_models_hyp(
     #     traceback.print_exc()
     #     continue
 
-    return {model_name:search_engine} #best_results
+    return {model_name: search_engine}  # best_results
 
 
-def run(args: Arguments,models_config:dict, X_train, y_train, save_path: str = None, verbose=0)->dict:
-
-
+def run(
+    args: Arguments,
+    models_config: dict,
+    X_train,
+    y_train,
+    save_path: str = None,
+    verbose=0,
+) -> dict[str, BaseSearchCV]:
     if np.any(np.isnan(X_train)):
         raise ValueError("There are NaN values in X_train.")
 
-    assert len(models_config)==1, "Provide only one model in models_config"
-    
+    assert len(models_config) == 1, "Provide only one model in models_config"
 
     # tune models
-    best_results = tune_models_hyp(
+    best_results = __tune_models_hyp(
         X_train,
         y_train,
         models_config=models_config,
@@ -312,7 +317,11 @@ class Objective(object):
     def __init__(self, args: Arguments, verbose: int = 0):
         self.args = deepcopy(args)
         self.pyod_detectors = deepcopy(sorted(self.args.pyod_detectors))
-        self.pyod_choices = [json.dumps(list(k)) for k in combinations(["iforest", "cblof", "loda", "knn", "DIF", "abod", "hbos"], 4)]
+        self.pyod_choices = [
+            json.dumps(list(k))
+            for k in combinations(self.pyod_detectors, 4
+            )
+        ]
         self.model_names = deepcopy(args.model_names)
         self.disable_pyod = deepcopy(args.disable_pyod_outliers)
         self.disable_samplers = deepcopy(args.disable_samplers)
@@ -323,9 +332,12 @@ class Objective(object):
         (self.X_train, self.y_train), self.col_transformer = build_dataset(
             args=args, verbose=verbose
         )
+        self.best_score = 0.0
+        self.ckpt_filename = os.path.join(
+            args.work_dir, args.study_name + "_best-run.joblib"
+        )
 
     def sample_cfg_optuna(self, trial, name: str, config: dict):
-
         _cfg = deepcopy(config)
 
         for k in _cfg.keys():
@@ -334,6 +346,11 @@ class Objective(object):
             _cfg[k] = trial.suggest_categorical(name + "__" + k, _cfg[k])
 
         return _cfg
+
+    def save_checkpoint(self, score: float, results: dict):
+        if score >= self.best_score:
+            self.best_score = score
+            joblib.dump(results, self.ckpt_filename)
 
     def __call__(self, trial):
         self.count_iter += 1
@@ -348,7 +365,7 @@ class Objective(object):
         # ]
         models_config = {model_name: HYP_CONFIGS.models[model_name]}
 
-        # TODO: sampling outlier detectors does not work!!!
+        
         # select outlier detector for data aug
         disable_pyod = trial.suggest_categorical(
             "disable_pyod", [True, self.disable_pyod]
@@ -358,8 +375,9 @@ class Objective(object):
         else:
             _cfgs = list()
             pyod_choices = trial.suggest_categorical(
-                    "pyod_choices", self.pyod_choices #range(1,self.pyod_detectors+1)
-                )
+                "pyod_choices",
+                self.pyod_choices,  # range(1,self.pyod_detectors+1)
+            )
             pyod_choices = json.loads(pyod_choices)
             for name in self.pyod_detectors:
                 _cfg = self.sample_cfg_optuna(
@@ -431,19 +449,24 @@ class Objective(object):
             save_path=None,
             verbose=self.verbose,
         )
-        try:
-            score = results[model_name].best_score_
-            results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
-            self.records.append(results)
-        except Exception as e:
-            print("\nError happened in Objective.__call__")
-            traceback.print_exc()
-            # print(e)
-            print(results,"\n")
-            score = None
+        
+        # wait until run is completed
+        while True: 
+            try:
+                score = results[model_name].best_score_
+                results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
+                self.records.append(results)
+                self.save_checkpoint(score=score, results=results)
+                break
+
+            except ValueError:
+                print("\nError happened in Objective.__call__")
+                traceback.print_exc()
+                # print(e)
+                print(results, "\n")
+                score = None
 
         return score
-
 
 
 # %%main
@@ -454,13 +477,12 @@ if __name__ == "__main__":
 
     args.model_names = (
         "decisionTree",
-        # "svc",
-        # "randomForest",
+        "randomForest",
         "balancedRandomForest",
-        # "gradientBoosting",
-        # "histGradientBoosting",
-        # "xgboost"
-    ) 
+        "gradientBoosting",
+        "histGradientBoosting",
+        "xgboost"
+    )
 
     current_time = datetime.now().strftime("%H-%M")
 
@@ -470,7 +492,7 @@ if __name__ == "__main__":
     args.optuna_n_trials = 50
 
     args.cv_n_iter = 1000
-    args.scoring = "f1" # 'f1', precision
+    args.scoring = "f1"  # 'f1', precision
     args.cv_method = "optuna"
     args.cv_gap = 1051 * 5
     args.n_splits = 5
@@ -481,14 +503,14 @@ if __name__ == "__main__":
 
     args.random_state = 41
 
-    args.disable_pyod_outliers = False
-    args.pyod_detectors = ["iforest", "cblof", "loda", "knn", "DIF", "abod", "hbos"]
-    
-    args.sampler_names = None 
+    args.disable_pyod_outliers = True
+    args.pyod_detectors = ['abod', 'cblof', 'hbos', 'iforest', 'knn', 'loda', 'mcd', 'mo_gaal']
+
+    args.sampler_names = None
     args.sampler_cfgs = None
     args.disable_samplers = True
 
-    args.concat_features = None # ("AccountId", "CUSTOMER_ID")
+    args.concat_features = None  # ("AccountId", "CUSTOMER_ID")
     args.concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )
@@ -503,8 +525,9 @@ if __name__ == "__main__":
     # for debugging
     # demo(args=args)
 
-    workdir = Path(r"D:\fraud-detection-galsen\runs-optuna")
-    workdir.mkdir(parents=True, exist_ok=True)
+    args.work_dir = Path(r"D:\fraud-detection-galsen\runs-optuna")
+    args.work_dir.mkdir(parents=True, exist_ok=True)
+    args.work_dir = str(args.work_dir) # for json serialization
 
     # using optuna
     study = optuna.create_study(
@@ -516,14 +539,20 @@ if __name__ == "__main__":
     )
 
     # save args
-    with open(workdir / (args.study_name + ".json"), "w") as file:
-        cfg = args.__dict__
-        cfg['cols_to_drop'] = COLUMNS_TO_DROP
-        cfg['cols_one_hot'] = COLUMNS_TO_ONE_HOT_ENCODE
-        cfg['cols_cat_encorde'] = COLUMNS_TO_CAT_ENCODE
-        cfg['cols_to_std_Scale'] = COLUMNS_TO_STD_SCALE
-        cfg['cols_to_robust_scale'] = COLUMNS_TO_ROBUST_SCALE                
-        json.dump(cfg, file, indent=4)
+    with open(os.path.join(args.work_dir, args.study_name + ".json"), "w") as file:
+
+        cols_preprocessed = dict()
+        cols_preprocessed["cols_to_drop"] = COLUMNS_TO_DROP
+        cols_preprocessed["cols_one_hot"] = COLUMNS_TO_ONE_HOT_ENCODE
+        cols_preprocessed["cols_cat_encorde"] = COLUMNS_TO_CAT_ENCODE
+        cols_preprocessed["cols_to_std_Scale"] = COLUMNS_TO_STD_SCALE
+        cols_preprocessed["cols_to_robust_scale"] = COLUMNS_TO_ROBUST_SCALE
+
+        json.dump({'args':args.__dict__,
+                   'cols':cols_preprocessed},
+                   file,
+                   indent=4
+                )
 
     objective_optuna = Objective(args=args, verbose=0)
     study.optimize(
@@ -536,7 +565,7 @@ if __name__ == "__main__":
     print(study.best_trial)
 
     # Save object
-    filename = workdir / (args.study_name + ".joblib")
+    filename = os.path.join(args.work_dir, args.study_name + ".joblib")
     if filename.exists():
         filename.with_stem(filename.stem + "_1")
     joblib.dump(objective_optuna, filename)

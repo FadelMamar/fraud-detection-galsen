@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import json
+
 
 COLUMNS_TO_DROP = [
     "CurrencyCode",
@@ -16,11 +18,7 @@ COLUMNS_TO_ONE_HOT_ENCODE = [
     "ChannelId",
     "ProviderId",
 ]
-COLUMNS_TO_CAT_ENCODE = [
-    "ProductCategory",
-    "ProductId",
-    "TX_HOUR"
-]
+COLUMNS_TO_CAT_ENCODE = ["ProductCategory", "ProductId", "TX_HOUR"]
 COLUMNS_TO_STD_SCALE = [
     "TX_DURING_WEEKEND",
     "TX_DURING_NIGHT",
@@ -29,13 +27,14 @@ COLUMNS_TO_STD_SCALE = [
 ]
 COLUMNS_TO_ROBUST_SCALE = []
 
-
 @dataclass
 class Arguments:
     data_path: str = ""
 
     # optuna
     study_name: str = "demo"
+
+    work_dir: str = None
 
     run_name: str = "debug"
 
@@ -74,3 +73,18 @@ class Arguments:
     # weightdecay: float = 1e-4
 
     # data augmentation
+
+def load_args_from_json(path:str):
+
+    args = Arguments()
+
+    with open(path,'r') as file:
+        cfg = json.load(file)
+    
+    for k in cfg['args'].keys():
+        try:
+            args.__dict__[k] = cfg[k]
+        except KeyError:
+            print('Failed to load: ',k)
+
+    return args, cfg

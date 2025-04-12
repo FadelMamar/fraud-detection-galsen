@@ -15,9 +15,7 @@ from sklearn.pipeline import Pipeline
 
 
 def get_customer_spending_behaviour_features(
-    customer_transactions, 
-    windows_size_in_days=[1, 7, 30],
-    feature="AccountId"
+    customer_transactions, windows_size_in_days=[1, 7, 30], feature="AccountId"
 ):
     # Let us first order transactions chronologically
     customer_transactions = customer_transactions.sort_values("TX_DATETIME")
@@ -42,22 +40,22 @@ def get_customer_spending_behaviour_features(
         AVG_AMOUNT_TX_WINDOW = SUM_AMOUNT_TX_WINDOW / (NB_TX_WINDOW + 1e-8)
 
         # Save feature values
+        customer_transactions[feature + "_NB_TX_" + str(window_size) + "DAY_WINDOW"] = (
+            list(NB_TX_WINDOW)
+        )
         customer_transactions[
-            feature+"_NB_TX_" + str(window_size) + "DAY_WINDOW"
-        ] = list(NB_TX_WINDOW)
-        customer_transactions[
-            feature+"_AVG_AMOUNT_" + str(window_size) + "DAY_WINDOW"
+            feature + "_AVG_AMOUNT_" + str(window_size) + "DAY_WINDOW"
         ] = list(AVG_AMOUNT_TX_WINDOW)
         # customer_transactions[
         #     feature+"_STD_AMOUNT_" + str(window_size) + "DAY_WINDOW"
         # ] = list(STD_TX_WINDOW)
-
 
     # Reindex according to transaction IDs
     customer_transactions.index = customer_transactions.TRANSACTION_ID
 
     # And return the dataframe with the new features
     return customer_transactions
+
 
 # Leaking data from targets into Features
 def get_count_risk_rolling_window(
@@ -189,7 +187,7 @@ def build_encoder_scalers(
         ("std", std_scaler, cols_std),
     ]
 
-    if len(cols_cat_encode) >0:
+    if len(cols_cat_encode) > 0:
         transformers.append(("cat", cat_encoder, cols_cat_encode))
 
     if len(cols_robust) > 0:
@@ -267,18 +265,15 @@ def perform_feature_engineering(
     # Customer ID transformation
     df_data = df_data.groupby("CUSTOMER_ID").apply(
         lambda x: get_customer_spending_behaviour_features(
-            x, 
-            windows_size_in_days=windows_size_in_days,
-            feature="CUSTOMER_ID"
+            x, windows_size_in_days=windows_size_in_days, feature="CUSTOMER_ID"
         )
     )
     df_data = df_data.sort_values("TX_DATETIME").reset_index(drop=True)
 
     # Account ID transformation:
-    df_data = df_data.groupby("AccountId").apply(lambda x: get_customer_spending_behaviour_features(
-            x, 
-            windows_size_in_days=windows_size_in_days,
-            feature="AccountId"
+    df_data = df_data.groupby("AccountId").apply(
+        lambda x: get_customer_spending_behaviour_features(
+            x, windows_size_in_days=windows_size_in_days, feature="AccountId"
         )
     )
     df_data = df_data.sort_values("TX_DATETIME").reset_index(drop=True)
@@ -288,12 +283,11 @@ def perform_feature_engineering(
         df_data["concat_features"] = df_data[concat_features].apply(
             lambda x: "+".join(x), axis=1, raw=False, result_type="reduce"
         )
-        df_data = df_data.groupby("concat_features").apply(lambda x: get_customer_spending_behaviour_features(
-                        x, 
-                        windows_size_in_days=windows_size_in_days,
-                        feature="concat_features"
-                    )
-            )    
+        df_data = df_data.groupby("concat_features").apply(
+            lambda x: get_customer_spending_behaviour_features(
+                x, windows_size_in_days=windows_size_in_days, feature="concat_features"
+            )
+        )
 
     # Labels
     y = df_data["TX_FRAUD"]
@@ -415,10 +409,14 @@ def load_transforms_pyod(
     return_fitted_models: bool = False,
 ):
     if fitted_detector_list is not None:
-        return partial(
+        transform_func = partial(
             concat_outliers_scores_pyod,
             fitted_detector_list=fitted_detector_list,
         )
+        if return_fitted_models:
+            return transform_func, model_list
+        else:
+            return transform_func
 
     assert isinstance(outliers_det_configs, OrderedDict), (
         f"received {type(outliers_det_configs)}"

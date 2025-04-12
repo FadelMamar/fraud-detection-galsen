@@ -15,7 +15,7 @@ def import_from_path(module_name: str, file_path: str):
         loaded python module.
 
     """
-    import importlib
+    import importlib.util
     import sys
 
     spec = importlib.util.spec_from_file_location(module_name, file_path)

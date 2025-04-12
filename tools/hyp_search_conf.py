@@ -193,8 +193,12 @@ fracs = (np.arange(1, 5) * 4e-3).tolist()
 samplers["nearmiss"] = dict(
     sampling_strategy=fracs,
     n_neighbors=[3, 5, 7, 9],
-    version=[1,],
-    n_jobs=[8,],
+    version=[
+        1,
+    ],
+    n_jobs=[
+        8,
+    ],
     sampler=NearMiss,
 )
 # oversampling
@@ -258,8 +262,30 @@ combinedsamplers = [
 # %% models
 models = dict()
 
-learning_rate=[0.0001, 0.0002, 0.0005, 0.001, 0.0022, 0.0046, 0.01, 0.0215, 0.0464, 0.1]
-C=[0.0001, 0.0008, 0.006, 0.0464, 0.3594, 2.7826, 21.5443, 166.8101, 1291.5497, 10000.0]
+learning_rate = [
+    0.0001,
+    0.0002,
+    0.0005,
+    0.001,
+    0.0022,
+    0.0046,
+    0.01,
+    0.0215,
+    0.0464,
+    0.1,
+]
+C = [
+    0.0001,
+    0.0008,
+    0.006,
+    0.0464,
+    0.3594,
+    2.7826,
+    21.5443,
+    166.8101,
+    1291.5497,
+    10000.0,
+]
 models["logisticReg"] = dict(
     penalty=["l2"],
     C=C,
@@ -342,7 +368,7 @@ models["randomForest"] = dict(
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
-    max_features=["sqrt", "log2","None"],
+    max_features=["sqrt", "log2", "None"],
     random_state=[None],
     n_jobs=[8],
     model=RandomForestClassifier,
@@ -355,10 +381,14 @@ models["balancedRandomForest"] = dict(
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
-    max_features=["sqrt", "log2", 'auto'],
-    random_state=[None,],
+    max_features=["sqrt", "log2", "auto"],
+    random_state=[
+        None,
+    ],
     sampling_strategy=(np.arange(1, 5) * 4e-3).tolist(),
-    n_jobs=[8,],
+    n_jobs=[
+        8,
+    ],
     model=BalancedRandomForestClassifier,
 )
 
