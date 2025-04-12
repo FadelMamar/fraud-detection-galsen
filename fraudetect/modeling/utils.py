@@ -5,10 +5,12 @@ from sklearn.model_selection import (
     RandomizedSearchCV,
 )
 from sklearn.model_selection._search import BaseSearchCV
+from hpsklearn import HyperoptEstimator
+from hyperopt import tpe
 import json
 import numpy as np
 import pandas as pd
-from sklearn.metrics import get_scorer
+from sklearn.metrics import get_scorer, f1_score
 import random
 from collections.abc import Iterable
 import optuna
@@ -115,10 +117,13 @@ def hyperparameter_tuning(
             sampler=TPESampler(multivariate=True, group=True),
             load_if_exists=True,
         )
-        param_dist = {
-            k: optuna.distributions.CategoricalDistribution(v)
-            for k, v in params_config.items()
-        }
+        param_dist = dict()
+        for k, v in params_config.items():
+            if isinstance(v,Iterable):
+                param_dist[k]=optuna.distributions.CategoricalDistribution(v)
+            else:
+                param_dist[k]=optuna.distributions.CategoricalDistribution([v,])
+        
         search_engine = optuna.integration.OptunaSearchCV(
             model,
             param_distributions=param_dist,
@@ -135,6 +140,19 @@ def hyperparameter_tuning(
             verbose=verbose,
         )
 
+    elif method == "hyperopt":
+        loss_fn = lambda y_true,y_pred: 1. - f1_score(y_true=y_true,
+                                                 y_pred=y_pred,
+                                                 pos_label=1,
+                                                 zero_division=1,
+                                                )
+        search_engine = HyperoptEstimator(classifier=model,
+                                          algo=tpe.suggest,
+                                          max_evals=n_iter,
+                                          loss_fn=loss_fn,
+                                          n_jobs=n_jobs,
+                                          trial_timeout=60*2,
+                                          )
     else:
         raise ValueError(
             "Invalid method. Choose either 'gridsearch', 'optuna' or 'random'."

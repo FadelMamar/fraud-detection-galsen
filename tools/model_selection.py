@@ -8,6 +8,7 @@ Created on Thu Apr 10 16:51:56 2025
 # %% funcs & imports
 from itertools import product, combinations
 import json
+import traceback
 from collections import OrderedDict
 from collections.abc import Iterable
 from copy import deepcopy
@@ -15,6 +16,7 @@ from pathlib import Path
 import joblib
 import json
 import optuna
+from hyperopt import tpe, hp, fmin
 from datetime import datetime, date
 from optuna.samplers import TPESampler
 import numpy as np
@@ -203,46 +205,48 @@ def tune_models_hyp(
 
     cv = TimeSeriesSplit(n_splits=n_splits, gap=gap)
 
-    best_results = dict()
-    for model_name in models_config.keys():
-        # try:
-        print(f"\nHyperparameter tuning for model: {model_name}")
+    # best_results = dict()
+    # for model_name in models_config.keys():
+    # try:
+    model_name = list(models_config.keys())[0]
+    print(f"\nHyperparameter tuning for model: {model_name}")
 
-        model, params_config = get_model(model_name, models_config)
+    model, params_config = get_model(model_name, models_config)
 
-        search_engine = hyperparameter_tuning(
-            cv=cv,
-            params_config=params_config,
-            X_train=X_train,
-            y_train=y_train,
-            model=model(),
-            scoring=scoring,
-            method=method,  # other, gridsearch
-            verbose=verbose,
-            n_iter=n_iter,
-            n_jobs=n_jobs,
-        )
-        best_results[model_name] = search_engine
+    search_engine = hyperparameter_tuning(
+        cv=cv,
+        params_config=params_config,
+        X_train=X_train,
+        y_train=y_train,
+        model=model(),
+        scoring=scoring,
+        method=method,  # other, gridsearch
+        verbose=verbose,
+        n_iter=n_iter,
+        n_jobs=n_jobs,
+    )
 
-        if verbose:
-            score = search_engine.best_score_
-            print(f"mean {scoring} score for best_estimator: {score:.4f}")
-            print("best params: ", search_engine.best_params_)
+    if verbose:
+        score = search_engine.best_score_
+        print(f"mean {scoring} score for best_estimator: {score:.4f}")
+        print("best params: ", search_engine.best_params_)
 
-        # except Exception as e:
-        #     print(e)
-        #     continue
+    # except Exception as e:
+    #     print(e)
+    #     traceback.print_exc()
+    #     continue
 
-    return best_results
+    return {model_name:search_engine} #best_results
 
 
-def run(args: Arguments, X_train, y_train, save_path: str = None, verbose=0):
+def run(args: Arguments,models_config:dict, X_train, y_train, save_path: str = None, verbose=0)->dict:
 
-    models_config = {name: HYP_CONFIGS.models[name] for name in args.model_names}
 
-    
     if np.any(np.isnan(X_train)):
         raise ValueError("There are NaN values in X_train.")
+
+    assert len(models_config)==1, "Provide only one model in models_config"
+    
 
     # tune models
     best_results = tune_models_hyp(
@@ -306,8 +310,8 @@ def demo(args: Arguments, verbose=0):
 
 class Objective(object):
     def __init__(self, args: Arguments, verbose: int = 0):
-        self.args = args
-        self.pyod_detectors = sorted(deepcopy(args.pyod_detectors))
+        self.args = deepcopy(args)
+        self.pyod_detectors = deepcopy(sorted(self.args.pyod_detectors))
         self.pyod_choices = [json.dumps(list(k)) for k in combinations(["iforest", "cblof", "loda", "knn", "DIF", "abod", "hbos"], 4)]
         self.model_names = deepcopy(args.model_names)
         self.disable_pyod = deepcopy(args.disable_pyod_outliers)
@@ -320,12 +324,16 @@ class Objective(object):
             args=args, verbose=verbose
         )
 
-    def sample_cfg_optuna(self, trial, name: str, cfg: dict):
-        for k in cfg.keys():
-            if not isinstance(cfg[k], Iterable):
+    def sample_cfg_optuna(self, trial, name: str, config: dict):
+
+        _cfg = deepcopy(config)
+
+        for k in _cfg.keys():
+            if not isinstance(_cfg[k], Iterable):
                 continue
-            cfg[k] = trial.suggest_categorical(name + "__" + k, cfg[k])
-        return cfg
+            _cfg[k] = trial.suggest_categorical(name + "__" + k, _cfg[k])
+
+        return _cfg
 
     def __call__(self, trial):
         self.count_iter += 1
@@ -335,10 +343,12 @@ class Objective(object):
             "classifier",
             self.model_names,  # HYP_CONFIGS.models.keys()
         )
-        self.args.model_names = [
-            model_name,
-        ]
+        # self.args.model_names = [
+        #     model_name,
+        # ]
+        models_config = {model_name: HYP_CONFIGS.models[model_name]}
 
+        # TODO: sampling outlier detectors does not work!!!
         # select outlier detector for data aug
         disable_pyod = trial.suggest_categorical(
             "disable_pyod", [True, self.disable_pyod]
@@ -346,10 +356,10 @@ class Objective(object):
         if disable_pyod:
             outliers_det_configs = None
         else:
-            pyod_choices = trial.suggest_categorical(
-                "pyod_choices", self.pyod_choices #range(1,self.pyod_detectors+1)
-            )
             _cfgs = list()
+            pyod_choices = trial.suggest_categorical(
+                    "pyod_choices", self.pyod_choices #range(1,self.pyod_detectors+1)
+                )
             pyod_choices = json.loads(pyod_choices)
             for name in self.pyod_detectors:
                 _cfg = self.sample_cfg_optuna(
@@ -415,21 +425,25 @@ class Objective(object):
         # try:
         results = run(
             args=self.args,
+            models_config=models_config,
             X_train=X_train,
             y_train=y_train,
             save_path=None,
             verbose=self.verbose,
         )
-        score = results[model_name].best_score_
-        results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
-        self.records.append(results)
-
-        # except Exception as e:
-        #     print(e)
-        #     print(results, "\n\n")
-        #     score = 0.0
+        try:
+            score = results[model_name].best_score_
+            results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
+            self.records.append(results)
+        except Exception as e:
+            print("\nError happened in Objective.__call__")
+            traceback.print_exc()
+            # print(e)
+            print(results,"\n")
+            score = None
 
         return score
+
 
 
 # %%main
@@ -440,12 +454,13 @@ if __name__ == "__main__":
 
     args.model_names = (
         "decisionTree",
-        "randomForest",
+        # "svc",
+        # "randomForest",
         "balancedRandomForest",
-        "gradientBoosting",
-        "histGradientBoosting",
-        "xgboost"
-    )  #'gradientBoosting','randomForest',)
+        # "gradientBoosting",
+        # "histGradientBoosting",
+        # "xgboost"
+    ) 
 
     current_time = datetime.now().strftime("%H-%M")
 
@@ -454,8 +469,8 @@ if __name__ == "__main__":
 
     args.optuna_n_trials = 50
 
-    args.cv_n_iter = 150
-    args.scoring = "f1"
+    args.cv_n_iter = 1000
+    args.scoring = "f1" # 'f1', precision
     args.cv_method = "optuna"
     args.cv_gap = 1051 * 5
     args.n_splits = 5
@@ -466,7 +481,7 @@ if __name__ == "__main__":
 
     args.random_state = 41
 
-    args.disable_pyod_outliers = True
+    args.disable_pyod_outliers = False
     args.pyod_detectors = ["iforest", "cblof", "loda", "knn", "DIF", "abod", "hbos"]
     
     args.sampler_names = None 
