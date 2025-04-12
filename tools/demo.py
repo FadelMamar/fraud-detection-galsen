@@ -111,7 +111,6 @@ transform = load_transforms_pyod(
 # %% Oversampling
 
 
-
 # frac = float(2*y_train.sum()/(1-y_train).sum())
 
 # oversampler_smote = SMOTE(sampling_strategy=frac,random_state=41, k_neighbors=5,)
@@ -155,3 +154,16 @@ sampler_cfgs = get_samplers_cfgs(sampler_names, configs)
 X_t, y_t = data_resampling(
     X=X_train, y=y_train, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
 )
+
+# %% Other
+
+from itertools import product
+import json
+
+cmb = product(configs.oversamplers, configs.undersamplers)
+
+for i in cmb:
+    str_i = json.dumps(list(i))
+    print(str_i, type(str_i))
+    i = json.loads(str_i)
+    print(i, type(i))

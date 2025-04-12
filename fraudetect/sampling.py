@@ -19,19 +19,6 @@ def get_sampler(name: str, config: dict) -> dict:
     return sampler, cfg
 
 
-def sample_cfg(cfg: dict) -> dict:
-    """
-    Sample a configuration from the given configuration dictionary.
-    """
-    sampled_cfg = {}
-    for key, value in cfg.items():
-        if isinstance(value, list):
-            sampled_cfg[key] = random.choice(value)
-        else:
-            sampled_cfg[key] = value
-    return sampled_cfg
-
-
 def instantiate_sampler(sampler, kwargs: dict):
     """
     Instantiate the sampler with the given parameters.
@@ -48,13 +35,12 @@ def build_samplers_pipeline(sampler_list: list) -> Pipeline:
 def data_resampling(
     X: np.ndarray, y: np.ndarray, sampler_names: list[str], sampler_cfgs: list[dict]
 ) -> tuple[np.ndarray, np.ndarray]:
-    
-    assert len(sampler_names)==len(sampler_cfgs)
-    
-    if len(sampler_names)<1:
-        print('No samplers provided')
-        return X,y
-    
+    assert len(sampler_names) == len(sampler_cfgs)
+
+    if len(sampler_names) < 1:
+        print("No samplers provided")
+        return X, y
+
     sampler_list = list()
 
     for sampler_name, cfg in zip(sampler_names, sampler_cfgs):

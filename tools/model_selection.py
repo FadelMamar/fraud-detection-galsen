@@ -6,6 +6,8 @@ Created on Thu Apr 10 16:51:56 2025
 """
 
 # %% funcs & imports
+from itertools import product, combinations
+import json
 from collections import OrderedDict
 from collections.abc import Iterable
 from copy import deepcopy
@@ -13,13 +15,13 @@ from pathlib import Path
 import joblib
 import json
 import optuna
-from datetime import datetime,date
+from datetime import datetime, date
 from optuna.samplers import TPESampler
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.model_selection._search import BaseSearchCV
-from fraudetect.modeling.utils import hyperparameter_tuning
+from fraudetect.modeling.utils import hyperparameter_tuning, get_model
 from fraudetect.dataset import data_loader
 from fraudetect.config import (
     COLUMNS_TO_DROP,
@@ -27,9 +29,9 @@ from fraudetect.config import (
     COLUMNS_TO_CAT_ENCODE,
     COLUMNS_TO_STD_SCALE,
     COLUMNS_TO_ROBUST_SCALE,
-    Arguments
+    Arguments,
 )
-from fraudetect.features import load_transforms_pyod,build_encoder_scalers
+from fraudetect.features import load_transforms_pyod, build_encoder_scalers
 from fraudetect.sampling import data_resampling
 from fraudetect import import_from_path, sample_cfg
 
@@ -51,8 +53,6 @@ def __prepare_data(
     delta_delay=7,
     delta_test=20,
     random_state=41,
-    sampler_names: list[str] = None,
-    sampler_cfgs: list[dict] = None,
 ):
     # load and transform
     (X_train, y_train), prequential_split_indices, col_transformer = data_loader(
@@ -62,46 +62,42 @@ def __prepare_data(
         delta_train=delta_train,
         delta_delay=delta_delay,
         delta_test=delta_test,
-        n_folds=1,# matters if prequential_split_indices are used
+        n_folds=1,  # matters if prequential_split_indices are used
         random_state=random_state,
         sampling_ratio=1.0,
     )
     print("Raw data shape: ", X_train.shape, y_train.shape)
 
-    # Re-sample data
-    if (sampler_names is not None) and (sampler_cfgs is not None):
-        X_train, y_train = data_resampling(
-            X=X_train, y=y_train, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
-        )
-        print("Resampled data shape: ", X_train.shape, y_train.shape)
-
     return X_train, y_train, col_transformer
 
+
 def build_dataset(args: Arguments, verbose=0):
-    
-    if args.cat_encoding_method == 'hashing':
-        kwargs = dict(n_components=args.cat_encoding_hash_n_components,
-                      hash_method=args.cat_encoding_hash_method
-                      )
-    elif args.cat_encoding_method == 'base_n':
-        kwargs = dict(base=args.cat_encoding_base_n,
-                      )
+    if args.cat_encoding_method == "hashing":
+        kwargs = dict(
+            n_components=args.cat_encoding_hash_n_components,
+            hash_method=args.cat_encoding_hash_method,
+        )
+    elif args.cat_encoding_method == "base_n":
+        kwargs = dict(
+            base=args.cat_encoding_base_n,
+        )
     else:
         kwargs = dict()
 
     # load data & do preprocessing
-    col_transformer = build_encoder_scalers(cols_onehot=COLUMNS_TO_ONE_HOT_ENCODE,
-                                            cols_cat_encode=COLUMNS_TO_CAT_ENCODE,
-                                            cols_std=COLUMNS_TO_STD_SCALE,
-                                            cols_robust=COLUMNS_TO_ROBUST_SCALE,
-                                            cat_encoding_method=args.cat_encoding_method,
-                                            add_imputer=args.add_imputer,
-                                            verbose=bool(verbose),
-                                            add_concat_features_transform=args.concat_features is not None,
-                                            n_jobs=args.n_jobs,
-                                            concat_features_encoding_kwargs=args.concat_features_encoding_kwargs,
-                                            **kwargs
-                                            )
+    col_transformer = build_encoder_scalers(
+        cols_onehot=COLUMNS_TO_ONE_HOT_ENCODE,
+        cols_cat_encode=COLUMNS_TO_CAT_ENCODE,
+        cols_std=COLUMNS_TO_STD_SCALE,
+        cols_robust=COLUMNS_TO_ROBUST_SCALE,
+        cat_encoding_method=args.cat_encoding_method,
+        add_imputer=args.add_imputer,
+        verbose=bool(verbose),
+        add_concat_features_transform=args.concat_features is not None,
+        n_jobs=args.n_jobs,
+        concat_features_encoding_kwargs=args.concat_features_encoding_kwargs,
+        **kwargs,
+    )
     kwargs_tranform_data = dict(
         col_transformer=col_transformer,
         cols_to_drop=COLUMNS_TO_DROP,
@@ -109,43 +105,85 @@ def build_dataset(args: Arguments, verbose=0):
         train_transform=None,  # some custom transform applied to X_train,y_train
         val_transform=None,  # some custom transform applied to X_val,y_val
         delay_period_accountid=args.delta_delay,
-        concat_features=args.concat_features
+        concat_features=args.concat_features,
     )
     X_train, y_train, col_transformer = __prepare_data(
-                                        data_path=args.data_path,
-                                        kwargs_tranform_data=kwargs_tranform_data,
-                                        delta_train=args.delta_train,
-                                        delta_delay=args.delta_delay,
-                                        delta_test=args.delta_test,
-                                        random_state=args.random_state,
-                                        sampler_names=args.sampler_names,
-                                        sampler_cfgs=args.sampler_cfgs,
-                                    )
-    
+        data_path=args.data_path,
+        kwargs_tranform_data=kwargs_tranform_data,
+        delta_train=args.delta_train,
+        delta_delay=args.delta_delay,
+        delta_test=args.delta_test,
+        random_state=args.random_state,
+    )
+
     # transformed column names
     # columns_of_transformed_data = list(map(lambda name: name.split('__')[1],
     #                                         list(col_transformer.get_feature_names_out()))
     #                                     )
     columns_of_transformed_data = col_transformer.get_feature_names_out()
     df_train_preprocessed = pd.DataFrame(X_train, columns=columns_of_transformed_data)
-    
+
     print("X_train_preprocessed columns: ", df_train_preprocessed.columns)
-    
-    # load pyod transform and apply it to X_train
-    transform_pyod = None
+
+    return (X_train, y_train), col_transformer
+
+
+# functions to augment data
+def __resample_data(
+    X,
+    y,
+    sampler_names: list[str],
+    sampler_cfgs: list[dict],
+):
+    assert len(sampler_names) == len(sampler_cfgs), "They should have the same length."
+
+    # Re-sample data
+    X, y = data_resampling(
+        X=X, y=y, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
+    )
+    print("Resampled data shape: ", X.shape, y.shape)
+
+    return X, y
+
+
+def __concat_pyod_scores(
+    X,
+    outliers_det_configs: OrderedDict,
+):
+    # load pyod transform and apply it to X
+    transform_pyod, fitted_models_pyod = load_transforms_pyod(
+        X_train=X,
+        outliers_det_configs=outliers_det_configs,
+        fitted_detector_list=None,
+        return_fitted_models=True,
+    )
+
+    return transform_pyod(X=X), fitted_models_pyod
+
+
+def augment_resample_dataset(
+    X,
+    y,
+    outliers_det_configs: OrderedDict | None,
+    sampler_names: list[str] | None,
+    sampler_cfgs: list[dict] | None,
+):
+    # augment data using outliers scores
     fitted_models_pyod = None
-    if args.outliers_det_configs is not None:
-        transform_pyod, fitted_models_pyod = load_transforms_pyod(
-            X_train=X_train,
-            outliers_det_configs=args.outliers_det_configs,
-            method=args.pyod_predict_proba_method,
-            add_confidence=False,
-            fitted_detector_list=None,
-            return_fitted_models=True
+    if outliers_det_configs is not None:
+        X, fitted_models_pyod = __concat_pyod_scores(
+            X,
+            outliers_det_configs=outliers_det_configs,
         )
-        X_train = transform_pyod(X=X_train)
-    
-    return (X_train, y_train), col_transformer, fitted_models_pyod
+
+    # resample data
+    if (sampler_names is not None) and (sampler_cfgs is not None):
+        X, y = __resample_data(
+            X=X, y=y, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
+        )
+
+    return (X, y), fitted_models_pyod
+
 
 def tune_models_hyp(
     X_train: np.ndarray,
@@ -167,45 +205,50 @@ def tune_models_hyp(
 
     best_results = dict()
     for model_name in models_config.keys():
-        try:
-            print(f"\nHyperparameter tuning for model: {model_name}")
+        # try:
+        print(f"\nHyperparameter tuning for model: {model_name}")
 
-            search_engine = hyperparameter_tuning(
-                cv=cv,
-                config=models_config,
-                X_train=X_train,
-                y_train=y_train,
-                model_name=model_name,
-                scoring=scoring,
-                method=method,  # other, gridsearch
-                verbose=verbose,
-                n_iter=n_iter,
-                n_jobs=n_jobs,
-            )
-            best_results[model_name] = search_engine
+        model, params_config = get_model(model_name, models_config)
 
-            if verbose:
-                score = search_engine.best_score_
-                print(f"mean {scoring} score for best_estimator: {score:.4f}")
-                print("best params: ", search_engine.best_params_)
+        search_engine = hyperparameter_tuning(
+            cv=cv,
+            params_config=params_config,
+            X_train=X_train,
+            y_train=y_train,
+            model=model(),
+            scoring=scoring,
+            method=method,  # other, gridsearch
+            verbose=verbose,
+            n_iter=n_iter,
+            n_jobs=n_jobs,
+        )
+        best_results[model_name] = search_engine
 
-        except Exception as e:
-            print(e)
-            continue
+        if verbose:
+            score = search_engine.best_score_
+            print(f"mean {scoring} score for best_estimator: {score:.4f}")
+            print("best params: ", search_engine.best_params_)
+
+        # except Exception as e:
+        #     print(e)
+        #     continue
 
     return best_results
 
-def load_models_cfg(names: list[str]):
-    return {name: HYP_CONFIGS.models[name] for name in names}
-
 
 def run(args: Arguments, X_train, y_train, save_path: str = None, verbose=0):
+
+    models_config = {name: HYP_CONFIGS.models[name] for name in args.model_names}
+
     
+    if np.any(np.isnan(X_train)):
+        raise ValueError("There are NaN values in X_train.")
+
     # tune models
     best_results = tune_models_hyp(
         X_train,
         y_train,
-        models_config=load_models_cfg(names=args.model_names),
+        models_config=models_config,
         n_splits=args.n_splits,
         gap=args.cv_gap,
         n_iter=args.cv_n_iter,
@@ -214,7 +257,7 @@ def run(args: Arguments, X_train, y_train, save_path: str = None, verbose=0):
         n_jobs=args.n_jobs,
         method=args.cv_method,
     )
-        
+
     # save results
     if save_path:
         joblib.dump(best_results, save_path)
@@ -222,29 +265,27 @@ def run(args: Arguments, X_train, y_train, save_path: str = None, verbose=0):
     return best_results
 
 
-def get_samplers_cfgs(sampler_names, configs):
-    sampler_cfgs = list()
+def demo(args: Arguments, verbose=0):
+    def get_samplers_cfgs(sampler_names, configs):
+        sampler_cfgs = list()
 
-    for name in sampler_names:
-        cfg = configs.samplers[name]
-        cfg = sample_cfg(cfg)  # random sampling
-        sampler_cfgs.append({name: cfg})
+        for name in sampler_names:
+            cfg = configs.samplers[name]
+            cfg = sample_cfg(cfg)  # random sampling
+            sampler_cfgs.append({name: cfg})
 
-    return sampler_cfgs
+        return sampler_cfgs
 
+    def get_pyod_cfgs(names, configs):
+        # sample cfg randomly for debugging
+        outliers_det_configs = []
+        for name in sorted(names):
+            cfg = configs.outliers_detectors[name]
+            cfg = sample_cfg(cfg)
+            outliers_det_configs.append((name, cfg))
 
-def get_pyod_cfgs(names, configs):
-    # sample cfg randomly for debugging
-    outliers_det_configs = []
-    for name in sorted(names):
-        cfg = configs.outliers_detectors[name]
-        cfg = sample_cfg(cfg)
-        outliers_det_configs.append((name, cfg))
+        return OrderedDict(outliers_det_configs)
 
-    return OrderedDict(outliers_det_configs)
-
-
-def demo(args: Arguments,verbose=0):
     # sample cfg randomly for debugging
     if args.sampler_names is not None:
         args.sampler_cfgs = get_samplers_cfgs(args.sampler_names, HYP_CONFIGS)
@@ -255,44 +296,38 @@ def demo(args: Arguments,verbose=0):
         args.outliers_det_configs = get_pyod_cfgs(args.pyod_detectors, HYP_CONFIGS)
 
     # run hyperparameter search
-    (X_train, y_train), col_transformer, fitted_models_pyod = build_dataset(args=args,verbose=verbose)
-    results = run(args=args,
-                  X_train=X_train,
-                  y_train=y_train,
-                  save_path=None,
-                  verbose=verbose)
+    (X_train, y_train), col_transformer = build_dataset(args=args, verbose=verbose)
+    results = run(
+        args=args, X_train=X_train, y_train=y_train, save_path=None, verbose=verbose
+    )
 
     return results
 
 
 class Objective(object):
-
-    def __init__(self,
-                 args:Arguments,
-                 disable_samplers:bool=True,
-                 verbose:int=0
-                 ):
-
+    def __init__(self, args: Arguments, verbose: int = 0):
         self.args = args
-        self.pyod_detectors = deepcopy(args.pyod_detectors)
+        self.pyod_detectors = sorted(deepcopy(args.pyod_detectors))
+        self.pyod_choices = [json.dumps(list(k)) for k in combinations(["iforest", "cblof", "loda", "knn", "DIF", "abod", "hbos"], 4)]
         self.model_names = deepcopy(args.model_names)
         self.disable_pyod = deepcopy(args.disable_pyod_outliers)
-        self.disable_samplers = disable_samplers
-        self.verbose=verbose
+        self.disable_samplers = deepcopy(args.disable_samplers)
+        self.verbose = verbose
         self.records = []
         self.count_iter = 0
-        
-        (self.X_train, self.y_train), self.col_transformer, self.fitted_models_pyod = build_dataset(args=args,verbose=verbose)
-    
+
+        (self.X_train, self.y_train), self.col_transformer = build_dataset(
+            args=args, verbose=verbose
+        )
+
     def sample_cfg_optuna(self, trial, name: str, cfg: dict):
         for k in cfg.keys():
             if not isinstance(cfg[k], Iterable):
                 continue
             cfg[k] = trial.suggest_categorical(name + "__" + k, cfg[k])
         return cfg
-          
+
     def __call__(self, trial):
-        
         self.count_iter += 1
 
         # select model
@@ -305,139 +340,188 @@ class Objective(object):
         ]
 
         # select outlier detector for data aug
-        self.args.disable_pyod_outliers = trial.suggest_categorical("disable_pyod", [True, self.disable_pyod])
-        if self.args.disable_pyod_outliers:
-            self.args.outliers_det_configs = None
+        disable_pyod = trial.suggest_categorical(
+            "disable_pyod", [True, self.disable_pyod]
+        )
+        if disable_pyod:
+            outliers_det_configs = None
         else:
-            pyod_detector_name = trial.suggest_categorical("pyod_det", self.pyod_detectors)
-            self.args.pyod_detectors = [
-                pyod_detector_name,
-            ]
-            self.args.outliers_det_configs = OrderedDict()
-            self.args.outliers_det_configs[pyod_detector_name] = self.sample_cfg_optuna(trial,
-                pyod_detector_name, HYP_CONFIGS.outliers_detectors[pyod_detector_name]
+            pyod_choices = trial.suggest_categorical(
+                "pyod_choices", self.pyod_choices #range(1,self.pyod_detectors+1)
             )
+            _cfgs = list()
+            pyod_choices = json.loads(pyod_choices)
+            for name in self.pyod_detectors:
+                _cfg = self.sample_cfg_optuna(
+                    trial, name, HYP_CONFIGS.outliers_detectors[name]
+                )
+                if name in pyod_choices:
+                    _cfgs.append(_cfg)
+            outliers_det_configs = OrderedDict(zip(pyod_choices, _cfgs))
 
-        # samplers
-        self.args.sampler_cfgs = None
-        self.args.sampler_names = None
-        if not trial.suggest_categorical("disable_samplers", 
-                                         [True, self.disable_samplers]):
+        # select samplers
+        sampler_cfgs, sampler_names = None, None
+        if not trial.suggest_categorical(
+            "disable_samplers", [True, self.disable_samplers]
+        ):
             conbimed_sampler = trial.suggest_categorical(
-                "conbined_sampler", HYP_CONFIGS.combinedsamplers + [None,]*len(HYP_CONFIGS.combinedsamplers)
+                "conbined_sampler",
+                HYP_CONFIGS.combinedsamplers
+                + [
+                    None,
+                ]
+                * len(HYP_CONFIGS.combinedsamplers),
             )
-            sampler_names = [conbimed_sampler]
+            sampler_names = [
+                conbimed_sampler,
+            ]
+
             if conbimed_sampler is None:
                 oversampler = trial.suggest_categorical(
-                    "over_sampler", HYP_CONFIGS.oversamplers
+                    "over_sampler",
+                    HYP_CONFIGS.oversamplers
+                    + [
+                        None,
+                    ],  # over_sampling is disabled when None is selected
                 )
                 undersampler = trial.suggest_categorical(
-                    "under_sampler", HYP_CONFIGS.undersamplers
+                    "under_sampler",
+                    HYP_CONFIGS.undersamplers,  # always done!
                 )
                 sampler_names = [oversampler, undersampler]
+                sampler_names = [k for k in sampler_names if k is not None]
 
-            # get sampler config
-            self.args.sampler_cfgs = []
+            # get samplers' config
+            sampler_cfgs = []
             for name in sampler_names:
                 # if name is not None:
-                _cfg = {name: self.sample_cfg_optuna(trial, name, HYP_CONFIGS.samplers[name])}
-                self.args.sampler_cfgs.append(_cfg)
+                _cfg = {
+                    name: self.sample_cfg_optuna(
+                        trial, name, HYP_CONFIGS.samplers[name]
+                    )
+                }
+                sampler_cfgs.append(_cfg)
+
+        # augment and resample data on the fly
+        (X_train, y_train), fitted_models_pyod = augment_resample_dataset(
+            X=self.X_train.copy(),
+            y=self.y_train.copy(),
+            outliers_det_configs=outliers_det_configs,
+            sampler_names=sampler_names,
+            sampler_cfgs=sampler_cfgs,
+        )
 
         # run cv and record
-        try:
-            results = run(args=self.args,
-                          X_train=self.X_train,
-                          y_train=self.y_train,
-                          save_path=None,
-                          verbose=self.verbose)
-            score = results[model_name].best_score_
-            self.records.append(results)
-        except Exception as e:
-            print(e)
-            print(results,'\n\n')
-            score = 0.
+        # try:
+        results = run(
+            args=self.args,
+            X_train=X_train,
+            y_train=y_train,
+            save_path=None,
+            verbose=self.verbose,
+        )
+        score = results[model_name].best_score_
+        results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
+        self.records.append(results)
+
+        # except Exception as e:
+        #     print(e)
+        #     print(results, "\n\n")
+        #     score = 0.0
 
         return score
 
 
-#%%main
+# %%main
 if __name__ == "__main__":
-    
-    #Running
+    # Running
     args = Arguments()
     args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
-    
-    args.model_names = ('randomForest',) #'gradientBoosting','randomForest',)
-    
+
+    args.model_names = (
+        "decisionTree",
+        "randomForest",
+        "balancedRandomForest",
+        "gradientBoosting",
+        "histGradientBoosting",
+        "xgboost"
+    )  #'gradientBoosting','randomForest',)
+
     current_time = datetime.now().strftime("%H-%M")
-    
-    args.study_name = "small-models" 
-    
-    args.cv_n_iter = 100
-    args.scoring = 'f1'
-    args.cv_method =  'optuna'
-    args.cv_gap = 1051*5
+
+    args.study_name = "tree-models"
+    args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
+
+    args.optuna_n_trials = 50
+
+    args.cv_n_iter = 150
+    args.scoring = "f1"
+    args.cv_method = "optuna"
+    args.cv_gap = 1051 * 5
     args.n_splits = 5
     args.n_jobs = 8
-    args.delta_train=50
-    args.delta_delay=7
-    args.delta_test=20
-    
+    args.delta_train = 50
+    args.delta_delay = 7
+    args.delta_test = 20
+
     args.random_state = 41
-    
+
     args.disable_pyod_outliers = True
-    args.pyod_detectors = ('iforest', 'cblof', 'loda', 'knn')
-    args.pyod_predict_proba_method = 'linear'
+    args.pyod_detectors = ["iforest", "cblof", "loda", "knn", "DIF", "abod", "hbos"]
     
-    args.sampler_names = None # ['SMOTE','nearmiss']
+    args.sampler_names = None 
     args.sampler_cfgs = None
-    
-    args.concat_features=('AccountId', 'CUSTOMER_ID')
-    args.concat_features_encoding_kwargs=dict(cat_encoding_method='hashing',
-                                         n_components=14
-                                         )
-    
+    args.disable_samplers = True
+
+    args.concat_features = None # ("AccountId", "CUSTOMER_ID")
+    args.concat_features_encoding_kwargs = dict(
+        cat_encoding_method="hashing", n_components=14
+    )
+
     args.add_imputer = False
-    
-    args.cat_encoding_method='binary'
-    args.cat_encoding_hash_n_components=8 # if cat_encoding_method='hashing'
-    args.cat_encoding_base_n=4 # if cat_encoding_method=base_n
-    args.windows_size_in_days = (1, 7, 30)
-     
+
+    args.cat_encoding_method = "binary"
+    args.cat_encoding_hash_n_components = 8  # if cat_encoding_method='hashing'
+    args.cat_encoding_base_n = 4  # if cat_encoding_method=base_n
+    args.windows_size_in_days = (1, 7, 15, 30)
+
     # for debugging
     # demo(args=args)
-    
+
     workdir = Path(r"D:\fraud-detection-galsen\runs-optuna")
-    workdir.mkdir(parents=True,exist_ok=True)   
+    workdir.mkdir(parents=True, exist_ok=True)
 
     # using optuna
-    study_name = args.study_name + f"_{str(date.today())}_{current_time}" 
     study = optuna.create_study(
         direction="maximize",
         sampler=TPESampler(multivariate=True, group=True),
-        study_name=study_name,
-        load_if_exists=True,
+        study_name=args.study_name,
+        load_if_exists=False,
         storage="sqlite:///hypsearch.sql",
     )
-    
-    objective_optuna = Objective(args=args,
-                                 disable_samplers=True,
-                                 verbose=0
-                                 )
-    study.optimize(objective_optuna,
-                   n_trials=100,
-                   n_jobs=8,
-                   show_progress_bar=True,
-                   timeout=60*60*3)
-    print(study.best_trial)
-    
+
     # save args
-    with open(workdir/(study_name+'.json'),'w') as file:
+    with open(workdir / (args.study_name + ".json"), "w") as file:
         cfg = args.__dict__
-        json.dump(cfg, file,indent=4)
-    
+        cfg['cols_to_drop'] = COLUMNS_TO_DROP
+        cfg['cols_one_hot'] = COLUMNS_TO_ONE_HOT_ENCODE
+        cfg['cols_cat_encorde'] = COLUMNS_TO_CAT_ENCODE
+        cfg['cols_to_std_Scale'] = COLUMNS_TO_STD_SCALE
+        cfg['cols_to_robust_scale'] = COLUMNS_TO_ROBUST_SCALE                
+        json.dump(cfg, file, indent=4)
+
+    objective_optuna = Objective(args=args, verbose=0)
+    study.optimize(
+        objective_optuna,
+        n_trials=args.optuna_n_trials,
+        n_jobs=8,
+        show_progress_bar=True,
+        timeout=60 * 60 * 3,
+    )
+    print(study.best_trial)
+
     # Save object
-    filename = workdir / study_name
+    filename = workdir / (args.study_name + ".joblib")
     if filename.exists():
-        filename.with_stem(filename.stem + '_1')
+        filename.with_stem(filename.stem + "_1")
     joblib.dump(objective_optuna, filename)

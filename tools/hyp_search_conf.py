@@ -12,6 +12,7 @@ from xgboost import XGBClassifier
 from imblearn.under_sampling import NearMiss, EditedNearestNeighbours
 from imblearn.over_sampling import SMOTE, ADASYN, BorderlineSMOTE, SVMSMOTE
 from imblearn.combine import SMOTEENN, SMOTETomek
+from imblearn.ensemble import BalancedRandomForestClassifier
 
 from pyod.models.iforest import IForest
 from pyod.models.dif import DIF
@@ -31,7 +32,7 @@ from collections import OrderedDict
 # %% data aug - pyod
 outliers_detectors = dict()
 
-_cnt = np.logspace(-4, -2, 10).tolist()
+_cnt = [0.0001, 0.00046, 0.00077, 0.0021, 0.006, 0.008]
 
 outliers_detectors["iforest"] = dict(
     detector=IForest,
@@ -187,14 +188,13 @@ outliers_detectors = OrderedDict(
 # %% samplers config
 samplers = dict()
 
-
 # under sampling
 fracs = (np.arange(1, 5) * 4e-3).tolist()
 samplers["nearmiss"] = dict(
     sampling_strategy=fracs,
     n_neighbors=[3, 5, 7, 9],
-    version=[1],
-    n_jobs=[8],
+    version=[1,],
+    n_jobs=[8,],
     sampler=NearMiss,
 )
 # oversampling
@@ -222,7 +222,6 @@ samplers["svmSMOTE"] = dict(
     m_neighbors=[5, 7, 10, 15, 20],
     out_step=[0.1, 0.2, 0.5, 0.7],
     k_neighbors=[3, 5, 7, 9],
-    kind=["borderline-1", "borderline-2"],
     sampler=SVMSMOTE,
 )
 
@@ -238,20 +237,32 @@ samplers["smoteENN"] = dict(
 )
 
 samplers["smoteTOMEK"] = dict(
-    sampling_strategy=fracs, random_state=[41], n_job=[8], sampler=SMOTETomek
+    sampling_strategy=fracs, random_state=[41], sampler=SMOTETomek
 )
 
-undersamplers = ["nearmiss",]
-oversamplers = ["SMOTE", "adasyn", "borderlineSMOTE", "svmSMOTE",]
-combinedsamplers = ["smoteENN", "smoteTOMEK",]
+undersamplers = [
+    "nearmiss",
+]
+oversamplers = [
+    "SMOTE",
+    "adasyn",
+    "borderlineSMOTE",
+    "svmSMOTE",
+]
+combinedsamplers = [
+    "smoteENN",
+    "smoteTOMEK",
+]
 
 
 # %% models
 models = dict()
 
+learning_rate=[0.0001, 0.0002, 0.0005, 0.001, 0.0022, 0.0046, 0.01, 0.0215, 0.0464, 0.1]
+C=[0.0001, 0.0008, 0.006, 0.0464, 0.3594, 2.7826, 21.5443, 166.8101, 1291.5497, 10000.0]
 models["logisticReg"] = dict(
     penalty=["l2"],
-    C=np.logspace(-4, 4, 10).tolist(),
+    C=C,
     class_weight=["balanced", None],
     solver=["liblinear"],
     max_iter=[int(1e4)],
@@ -261,7 +272,7 @@ models["logisticReg"] = dict(
 )
 
 models["svc"] = dict(
-    C=np.logspace(-4, 4, 10).tolist(),
+    C=C,
     kernel=["poly", "rbf", "linear"],
     degree=[2, 3, 5, 7],
     gamma=["auto", "scale"],
@@ -276,7 +287,7 @@ models["svc"] = dict(
 models["linearSVC"] = dict(
     penalty=["l2"],
     loss=["square_hinge", "hinge"],
-    C=np.logspace(-4, 4, 10).tolist(),
+    C=C,
     class_weight=["balanced", None],
     max_iter=[int(1e4)],
     random_state=[None],
@@ -292,7 +303,7 @@ models["sgdClassifier"] = dict(
         "log_loss",
     ],
     penalty=["l2", "l1", "elasticnet", None],
-    alpha=np.logspace(-4, 4, 10).tolist(),
+    alpha=C,
     l1_ratio=[0.15, 0.5, 0.85],
     class_weight=[
         "balanced",
@@ -331,16 +342,30 @@ models["randomForest"] = dict(
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
-    max_features=["sqrt", "log2", None],
+    max_features=["sqrt", "log2","None"],
     random_state=[None],
     n_jobs=[8],
     model=RandomForestClassifier,
 )
 
+models["balancedRandomForest"] = dict(
+    n_estimators=[10, 20, 50, 100, 200, 500],
+    criterion=["gini", "entropy", "log_loss"],
+    max_depth=[None, 5, 7, 9, 10, 15, 20],
+    min_samples_split=[2, 3, 4],
+    min_samples_leaf=[1, 2],
+    class_weight=["balanced", "balanced_subsample"],
+    max_features=["sqrt", "log2", 'auto'],
+    random_state=[None],
+    sampling_strategy=(np.arange(1, 5) * 4e-3).tolist(),
+    n_jobs=[8],
+    model=BalancedRandomForestClassifier,
+)
+
 models["gradientBoosting"] = dict(
     loss=["log_loss", "exponential"],
     n_estimators=[10, 50, 100, 200, 500],
-    learning_rate=np.logspace(-4, -1, 10).tolist(),
+    learning_rate=learning_rate,
     subsample=[0.75, 0.85, 1.0],
     criterion="friedman_mse",
     max_depth=[None, 5, 7, 9, 10, 15, 20],
@@ -356,9 +381,9 @@ models["gradientBoosting"] = dict(
 models["histGradientBoosting"] = dict(
     loss=["log_loss"],
     max_iter=[100, 500, 1000, 10000],
-    learning_rate=np.logspace(-4, -1, 10).tolist(),
+    learning_rate=learning_rate,
     max_depth=[None, 3, 5, 7, 9, 10, 15, 20],
-    l2_regularization=np.logspace(-4, 4, 10).tolist(),
+    l2_regularization=C,
     categorical_features=[None],
     random_state=[None],
     max_bins=[2**5 - 1, 2**6 - 1, 2**7 - 1, 2**8 - 1],
@@ -378,7 +403,7 @@ models["xgboost"] = dict(
     n_jobs=[8],
     objective=["binary:hinge", "binary:logistic"],
     tree_method=["hist"],
-    scale_pos_weight=np.logspace(0, 3, 5).tolist(),
+    scale_pos_weight=[1.0, 5.62, 31.62, 177.83, 1000.0],
     subsample=[0.5, 0.75, 0.85, 1.0],
     colsample_bytree=[0.5, 0.75, 0.85, 1.0],
     gamma=[0.0],
@@ -386,7 +411,7 @@ models["xgboost"] = dict(
     reg_alpha=[0.0],
     eval_metric=["error"],
     importance_type=["gain"],
-    random_state=[41],
+    random_state=[None],
     enable_categorical=[
         True,
     ],

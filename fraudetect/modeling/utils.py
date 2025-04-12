@@ -14,6 +14,7 @@ from collections.abc import Iterable
 import optuna
 from optuna.samplers import TPESampler
 
+
 def evaluate(classifier, X, y):
     metrics = ["accuracy", "f1", "average_precision", "precision", "recall"]
     for metric in metrics:
@@ -59,26 +60,23 @@ def instantiate_model(model, **kwargs):
 
 def hyperparameter_tuning(
     cv,
-    config: dict,
+    params_config: dict,
     X_train: np.ndarray,
     y_train: np.ndarray,
-    model_name: str = "randomForest",
+    model,
     scoring: str = "f1",
     n_iter: int = 50,
     n_jobs: int = 8,
     verbose: int = 0,
     method: str = "optuna",
 ) -> BaseSearchCV:
-    # Prequential search for hyperparameter tuning
-    model, model_cfg = get_model(model_name, config)
-
     if verbose > 0:
-        print(json.dumps(model_cfg, indent=4))
+        print(json.dumps(params_config, indent=4))
 
     if method == "gridsearch":
         search_engine = GridSearchCV(
-            model(),
-            param_grid=model_cfg,
+            model,
+            param_grid=params_config,
             scoring=scoring,
             cv=cv,
             refit=True,
@@ -87,21 +85,21 @@ def hyperparameter_tuning(
         )
 
     # elif method == "halving":
-        # search_engine = HalvingRandomSearchCV(
-        #     model(),
-        #     param_distributions=model_cfg,
-        #     scoring=scoring,
-        #     cv=cv,
-        #     refit=True,
-        #     n_jobs=n_jobs,
-        #     random_state=41,
-        #     verbose=verbose,
-        # )
+    # search_engine = HalvingRandomSearchCV(
+    #     model,
+    #     param_distributions=params_config,
+    #     scoring=scoring,
+    #     cv=cv,
+    #     refit=True,
+    #     n_jobs=n_jobs,
+    #     random_state=41,
+    #     verbose=verbose,
+    # )
 
     elif method == "random":
         search_engine = RandomizedSearchCV(
-            model(),
-            param_distributions=model_cfg,
+            model,
+            param_distributions=params_config,
             scoring=scoring,
             cv=cv,
             refit=True,
@@ -110,29 +108,31 @@ def hyperparameter_tuning(
             random_state=41,
             verbose=verbose,
         )
-    
-    elif method == 'optuna':
+
+    elif method == "optuna":
         study = optuna.create_study(
-        direction="maximize",
-        sampler=TPESampler(multivariate=True, group=True),
-        load_if_exists=True,
+            direction="maximize",
+            sampler=TPESampler(multivariate=True, group=True),
+            load_if_exists=True,
         )
-        param_dist = {k:optuna.distributions.CategoricalDistribution(v) for k,v in model_cfg.items()}
-        search_engine = optuna.integration.OptunaSearchCV(model(),
-                                                          param_distributions=param_dist,
-                                                          cv=cv,
-                                                          refit=True,
-                                                          n_jobs=n_jobs,
-                                                          study=study,
-                                                          scoring=scoring,
-                                                          # error_score='raise',
-                                                          max_iter=10000,
-                                                          timeout=60*3,
-                                                          n_trials=n_iter,
-                                                          random_state=41,
-                                                          verbose=verbose
-
-
+        param_dist = {
+            k: optuna.distributions.CategoricalDistribution(v)
+            for k, v in params_config.items()
+        }
+        search_engine = optuna.integration.OptunaSearchCV(
+            model,
+            param_distributions=param_dist,
+            cv=cv,
+            refit=True,
+            n_jobs=n_jobs,
+            study=study,
+            scoring=scoring,
+            # error_score='raise',
+            max_iter=10000,
+            timeout=60 * 3,
+            n_trials=n_iter,
+            random_state=41,
+            verbose=verbose,
         )
 
     else:
