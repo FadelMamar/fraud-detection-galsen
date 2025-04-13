@@ -1,5 +1,6 @@
 import numpy as np
 from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.svm import LinearSVC, SVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import (
@@ -347,6 +348,25 @@ models["sgdClassifier"] = dict(
     model=SGDClassifier,
 )
 
+models["mlp"] = dict(
+    hidden_layer_sizes=[(100,),(100,50),(50,100,50)],
+    activation=["relu","identity"],
+    solver=['adam',],
+    alpha=[1e-1, 1e-2, 1e-3, 1e-4],
+    learning_rate_init=[1e-2, 1e-3, 1e-4],
+    max_iter=[50, 100, 300, 500],
+    batch_size=['auto',],
+    shuffle=[True,],
+    random_state=[None,],
+    tol=[1e-4,],
+    n_iter_no_change=[10,],
+    beta_1=[0.9,0.95],
+    beta_2=[0.999,0.99,0.98],
+    early_stopping=[False,],
+    model=MLPClassifier,
+)
+
+
 models["decisionTree"] = dict(
     criterion=["gini", "entropy", "log_loss"],
     splitter=["best"],
@@ -429,13 +449,13 @@ models["xgboost"] = dict(
     n_estimators=[10, 20, 50, 75, 100],
     max_depth=[5, 10, 15, 20, 30],
     learning_rate=[1e-1, 1e-2, 1e-3],
-    booster=["gbtree", "gblinear", "dart"],
+    booster=["gbtree", "dart"],
     n_jobs=[8],
     objective=["binary:hinge", "binary:logistic"],
     tree_method=["hist"],
     scale_pos_weight=[1.0, 5.62, 31.62, 177.83, 1000.0],
-    subsample=[0.5, 0.75, 0.85, 1.0],
-    colsample_bytree=[0.5, 0.75, 0.85, 1.0],
+    subsample=[0.85, 1.0],
+    colsample_bytree=[0.85, 1.0],
     gamma=[0.0],
     reg_lambda=[1.0],
     reg_alpha=[0.0],
@@ -443,7 +463,7 @@ models["xgboost"] = dict(
     importance_type=["gain"],
     random_state=[None],
     enable_categorical=[
-        True,
+        False,
     ],
     model=XGBClassifier,
 )

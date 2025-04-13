@@ -38,7 +38,9 @@ from fraudetect.features import load_transforms_pyod, build_encoder_scalers
 from fraudetect.sampling import data_resampling
 from fraudetect import import_from_path, sample_cfg
 
-
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
 try:
     HYP_CONFIGS = import_from_path(
         "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
@@ -326,13 +328,14 @@ class Objective(object):
         self.disable_pyod = deepcopy(args.disable_pyod_outliers)
         self.disable_samplers = deepcopy(args.disable_samplers)
         self.verbose = verbose
-        self.records = []
+        self.current_run_result = None
         self.count_iter = 0
 
         (self.X_train, self.y_train), self.col_transformer = build_dataset(
             args=args, verbose=verbose
         )
         self.best_score = 0.0
+        self.transform_pipeline = None
         self.ckpt_filename = os.path.join(
             args.work_dir, args.study_name + "_best-run.joblib"
         )
@@ -348,23 +351,34 @@ class Objective(object):
         return _cfg
 
     def save_checkpoint(self, score: float, results: dict):
+
         if score >= self.best_score:
             self.best_score = score
-            joblib.dump(results, self.ckpt_filename)
+            vals = [results, self.transform_pipeline]
+            joblib.dump(vals, self.ckpt_filename)
 
     def __call__(self, trial):
         self.count_iter += 1
+
+        X=self.X_train.copy()
+        y=self.y_train.copy()
 
         # select model
         model_name = trial.suggest_categorical(
             "classifier",
             self.model_names,  # HYP_CONFIGS.models.keys()
         )
-        # self.args.model_names = [
-        #     model_name,
-        # ]
         models_config = {model_name: HYP_CONFIGS.models[model_name]}
 
+        # PCA and std scaling
+        do_pca = trial.suggest_categorical('do_pca',[False, self.args.do_pca])
+        if do_pca:
+            n_components = trial.suggest_int('n_components', min(5,self.X_train.shape[1]), self.X_train.shape[1], 3)
+            pca_transform = PCA(n_components=n_components)
+            std_scaler = StandardScaler()
+            self.transform_pipeline = Pipeline(steps=[("scaler", std_scaler), ("pca", pca_transform)])
+            X = self.transform_pipeline.fit_transform(X=X)
+            
         
         # select outlier detector for data aug
         disable_pyod = trial.suggest_categorical(
@@ -431,9 +445,9 @@ class Objective(object):
                 sampler_cfgs.append(_cfg)
 
         # augment and resample data on the fly
-        (X_train, y_train), fitted_models_pyod = augment_resample_dataset(
-            X=self.X_train.copy(),
-            y=self.y_train.copy(),
+        (X, y), fitted_models_pyod = augment_resample_dataset(
+            X=X,
+            y=y,
             outliers_det_configs=outliers_det_configs,
             sampler_names=sampler_names,
             sampler_cfgs=sampler_cfgs,
@@ -444,27 +458,26 @@ class Objective(object):
         results = run(
             args=self.args,
             models_config=models_config,
-            X_train=X_train,
-            y_train=y_train,
+            X_train=X,
+            y_train=y,
             save_path=None,
             verbose=self.verbose,
         )
         
         # wait until run is completed
-        while True: 
-            try:
-                score = results[model_name].best_score_
-                results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
-                self.records.append(results)
-                self.save_checkpoint(score=score, results=results)
-                break
+        try:
+            score = results[model_name].best_score_
+            results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
+            self.save_checkpoint(score=score, results=results)
+            self.current_run_result = results
 
-            except ValueError:
-                print("\nError happened in Objective.__call__")
-                traceback.print_exc()
-                # print(e)
-                print(results, "\n")
-                score = None
+        except ValueError:
+            # print("\nError happened in Objective.__call__")
+            traceback.print_exc()
+            # # print(e)
+            print(results, "\n")
+            score = 0
+            
 
         return score
 
@@ -476,11 +489,13 @@ if __name__ == "__main__":
     args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
 
     args.model_names = (
+        # "mlp",
         "decisionTree",
+        # "logisticReg",
         "randomForest",
         "balancedRandomForest",
-        "gradientBoosting",
-        "histGradientBoosting",
+        # "gradientBoosting",
+        # "histGradientBoosting",
         "xgboost"
     )
 
@@ -491,26 +506,28 @@ if __name__ == "__main__":
 
     args.optuna_n_trials = 50
 
-    args.cv_n_iter = 1000
+    args.cv_n_iter = 500
     args.scoring = "f1"  # 'f1', precision
     args.cv_method = "optuna"
     args.cv_gap = 1051 * 5
     args.n_splits = 5
-    args.n_jobs = 8
+    args.n_jobs = 6
     args.delta_train = 50
     args.delta_delay = 7
     args.delta_test = 20
 
-    args.random_state = 41
+    args.random_state = 41 # for data prep
 
-    args.disable_pyod_outliers = True
+    args.do_pca = True # try pca
+
+    args.disable_pyod_outliers = False
     args.pyod_detectors = ['abod', 'cblof', 'hbos', 'iforest', 'knn', 'loda', 'mcd', 'mo_gaal']
 
     args.sampler_names = None
     args.sampler_cfgs = None
-    args.disable_samplers = True
+    args.disable_samplers = False
 
-    args.concat_features = None  # ("AccountId", "CUSTOMER_ID")
+    args.concat_features = None #("AccountId", "CUSTOMER_ID")
     args.concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )
@@ -566,6 +583,4 @@ if __name__ == "__main__":
 
     # Save object
     filename = os.path.join(args.work_dir, args.study_name + ".joblib")
-    if filename.exists():
-        filename.with_stem(filename.stem + "_1")
     joblib.dump(objective_optuna, filename)

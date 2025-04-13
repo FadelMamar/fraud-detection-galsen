@@ -152,6 +152,8 @@ venv.bak/
 
 *.joblib
 
+runs*
+
 # mypy
 .mypy_cache/
 .dmypy.json

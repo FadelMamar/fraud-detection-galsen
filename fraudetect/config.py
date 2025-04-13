@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 import json
+from typing import Sequence
+import traceback
 
 
 COLUMNS_TO_DROP = [
@@ -43,26 +45,27 @@ class Arguments:
     delta_delay: int = 7
     delta_test: int = 20
     random_state: int = 41
-    windows_size_in_days = (1, 7, 30)
-    sampler_names = None
-    sampler_cfgs = None
+    windows_size_in_days:Sequence = (1, 7, 30)
+    sampler_names:Sequence = None
+    sampler_cfgs:Sequence = None
     outliers_det_configs = None
-    model_names = ("sgdClassifier", "xgboost", "randomForest", "histGradientBoosting")
-    pyod_detectors = ("iforest", "cblof", "loda", "knn")
-    disable_pyod_outliers = False
-    disable_samplers = False
-    cv_n_iter = 20  # for cross validation
-    cv_gap = 1051 * 5
-    cv_method = "optuna"
-    n_splits = 5
-    n_jobs = 8
-    scoring = "f1"
+    model_names:Sequence = ("sgdClassifier", "xgboost", "randomForest", "histGradientBoosting")
+    pyod_detectors:Sequence = ("iforest", "cblof", "loda", "knn")
+    disable_pyod_outliers:bool = False
+    disable_samplers:bool = False
+    do_pca:bool=False #  try pca
+    cv_n_iter:int = 20  # for cross validation
+    cv_gap:int = 1051 * 5
+    cv_method:str = "optuna"
+    n_splits:int = 5
+    n_jobs:int = 8
+    scoring:str = "f1"
     cat_encoding_method: str = "binary"  # count, binary, base_n, hashing
     cat_encoding_base_n: int = 4
     cat_encoding_hash_method: str = "md5"
     cat_encoding_hash_n_components: int = 8
     add_imputer: bool = False
-    concat_features = ("AccountId", "CUSTOMER_ID")  # or None to disable
+    concat_features:Sequence = ("AccountId", "CUSTOMER_ID")  # or None to disable
     concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )
@@ -83,8 +86,9 @@ def load_args_from_json(path:str):
     
     for k in cfg['args'].keys():
         try:
-            args.__dict__[k] = cfg[k]
+            args.__setattr__(k, cfg['args'][k])
         except KeyError:
-            print('Failed to load: ',k)
+            print('\nFailed to load: ',k)
+            traceback.print_exc()
 
     return args, cfg
