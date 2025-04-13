@@ -230,14 +230,14 @@ def perform_feature_engineering(
     delay_period_accountid: int = 7,
     mode: str = "train",
     concat_features: Iterable = None,
-) -> pd.DataFrame:
+) -> tuple:
     """
     Feature engineering function to be used in the pipeline.
     """
 
     # checks
-    assert mode in ["train", "test", "val"], (
-        "Error: mode should be either 'train' or 'test' or 'val'"
+    assert mode in ["train", "val", "predict"], (
+        "Error: mode should be either 'train' or 'val' or 'predict' "
     )
     assert isinstance(concat_features, Iterable) or (concat_features is None)
     if concat_features is not None:
@@ -288,12 +288,13 @@ def perform_feature_engineering(
                 x, windows_size_in_days=windows_size_in_days, feature="concat_features"
             )
         )
-
-    # Labels
-    y = df_data["TX_FRAUD"]
-
-    # Features
-    df_data.drop(columns=["TX_FRAUD"], inplace=True)
+    y=None
+    if mode in ['train','val']:
+        # Labels
+        y = df_data["TX_FRAUD"]
+        # Features
+        df_data.drop(columns=["TX_FRAUD"], inplace=True)
+        
     X = df_data
 
     # Drop unneeded_columns
@@ -306,12 +307,6 @@ def perform_feature_engineering(
         # Transform the test/val data
         X_preprocessed = col_transformer.transform(X)
 
-    # columns_of_transformed_data = list(
-    #     map(lambda name: name.split('__')[1],
-    #         list(col_transformer.get_feature_names_out())
-    #     )
-    # )
-
     return X_preprocessed, y
 
 
@@ -323,44 +318,65 @@ def feature_selector(
 
 
 def transform_data(
-    train_df: pd.DataFrame,
-    val_df: pd.DataFrame | None,
+    train_df: pd.DataFrame|None,
     col_transformer: ColumnTransformer,
     cols_to_drop: list | None,
+    val_df: pd.DataFrame | None=None,
+    pred_df:pd.DataFrame | None=None,
     train_transform=None,
     val_transform=None,
     delay_period_accountid: int = 7,
     windows_size_in_days=[1, 7, 30],
     concat_features: list = None,
 ) -> tuple:
-    X_train, y_train = perform_feature_engineering(
-        train_df,
-        col_transformer=col_transformer,
-        cols_to_drop=cols_to_drop,
-        mode="train",
-        delay_period_accountid=delay_period_accountid,
-        windows_size_in_days=windows_size_in_days,
-        concat_features=concat_features,
-    )
-    if train_transform is not None:
-        X_train, y_train = train_transform(X_train, y_train)
-
-    if val_df is None:
+    
+    assert (train_df is None) + (val_df is None) + (pred_df is None) == 2, "Exactly one should be given"
+    
+    if train_df is not None:
+        X_train, y_train = perform_feature_engineering(
+            train_df,
+            col_transformer=col_transformer,
+            cols_to_drop=cols_to_drop,
+            mode="train",
+            delay_period_accountid=delay_period_accountid,
+            windows_size_in_days=windows_size_in_days,
+            concat_features=concat_features,
+        )
+        if train_transform is not None:
+            X_train = train_transform(X_train)
+        
         return (X_train, y_train), col_transformer
 
-    X_val, y_val = perform_feature_engineering(
-        val_df,
-        col_transformer=col_transformer,
-        cols_to_drop=cols_to_drop,
-        mode="val",
-        delay_period_accountid=delay_period_accountid,
-        windows_size_in_days=windows_size_in_days,
-        concat_features=concat_features,
-    )
-    if val_transform is not None:
-        X_val, y_val = val_transform(X_val, y_val)
+    if val_df is not None:
+        X_val, y_val = perform_feature_engineering(
+            val_df,
+            col_transformer=col_transformer,
+            cols_to_drop=cols_to_drop,
+            mode="val",
+            delay_period_accountid=delay_period_accountid,
+            windows_size_in_days=windows_size_in_days,
+            concat_features=concat_features,
+        )
+        if val_transform is not None:
+            X_val = val_transform(X_val)
 
-    return (X_train, y_train, X_val, y_val), col_transformer
+        return (X_val, y_val),col_transformer
+    
+    if pred_df is not None:
+        X_pred, y = perform_feature_engineering(
+            val_df,
+            col_transformer=col_transformer,
+            cols_to_drop=cols_to_drop,
+            mode="predict",
+            delay_period_accountid=delay_period_accountid,
+            windows_size_in_days=windows_size_in_days,
+            concat_features=concat_features,
+        )
+        if val_transform is not None:
+            X_pred = val_transform(X_pred)
+        
+        return (X_pred,y), col_transformer
+
 
 
 def fit_outliers_detectors(

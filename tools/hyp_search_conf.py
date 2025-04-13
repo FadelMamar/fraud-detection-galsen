@@ -190,7 +190,7 @@ outliers_detectors = OrderedDict(
 samplers = dict()
 
 # under sampling
-fracs = (np.arange(1, 5) * 4e-3).tolist()
+fracs = (np.arange(2, 5) * 4e-3).tolist()
 samplers["nearmiss"] = dict(
     sampling_strategy=fracs,
     n_neighbors=[3, 5, 7, 9],
@@ -203,7 +203,7 @@ samplers["nearmiss"] = dict(
     sampler=NearMiss,
 )
 # oversampling
-fracs = (np.arange(1, 3) * 4e-3).tolist()
+fracs = (np.arange(2, 5) * 4e-3).tolist()
 samplers["SMOTE"] = dict(
     sampling_strategy=fracs, random_state=[41], k_neighbors=[3, 5, 7, 9], sampler=SMOTE
 )
@@ -349,55 +349,55 @@ models["sgdClassifier"] = dict(
 )
 
 models["mlp"] = dict(
-    hidden_layer_sizes=[(100,),(100,50),(50,100,50)],
-    activation=["relu","identity"],
+    hidden_layer_sizes=[(100,),(100,50),],
+    activation=["relu",],
     solver=['adam',],
     alpha=[1e-1, 1e-2, 1e-3, 1e-4],
-    learning_rate_init=[1e-2, 1e-3, 1e-4],
+    learning_rate_init=[1e-3, 1e-4],
     max_iter=[50, 100, 300, 500],
     batch_size=['auto',],
     shuffle=[True,],
     random_state=[None,],
     tol=[1e-4,],
     n_iter_no_change=[10,],
-    beta_1=[0.9,0.95],
-    beta_2=[0.999,0.99,0.98],
+    beta_1=[0.9,],
+    beta_2=[0.999,],
     early_stopping=[False,],
     model=MLPClassifier,
 )
 
 
 models["decisionTree"] = dict(
-    criterion=["gini", "entropy", "log_loss"],
+    criterion=["gini", "entropy",],
     splitter=["best"],
-    max_depth=[None, 5, 10, 15, 20, 30],
+    max_depth=[5, 10, 15, 20, 25],
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=[
         "balanced",
     ],
-    max_features=["sqrt", "log2", None],
+    max_features=["sqrt", "log2",],
     random_state=[None],
     model=DecisionTreeClassifier,
 )
 
 models["randomForest"] = dict(
-    n_estimators=[10, 20, 50, 100, 200, 500],
-    criterion=["gini", "entropy", "log_loss"],
-    max_depth=[None, 5, 10, 15, 20, 30],
+    n_estimators=[3, 5, 7, 11, 19],
+    criterion=["entropy",],
+    max_depth=[5, 10, 15,],
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
-    max_features=["sqrt", "log2", "None"],
+    max_features=["sqrt", "log2",],
     random_state=[None],
     n_jobs=[8],
     model=RandomForestClassifier,
 )
 
 models["balancedRandomForest"] = dict(
-    n_estimators=[10, 20, 50, 100, 200, 500],
-    criterion=["gini", "entropy", "log_loss"],
-    max_depth=[None, 5, 10, 15, 20, 30],
+    n_estimators=[3, 5, 7, 11, 19],
+    criterion=["entropy",],
+    max_depth=[5, 10, 15,],
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
@@ -405,7 +405,7 @@ models["balancedRandomForest"] = dict(
     random_state=[
         None,
     ],
-    sampling_strategy=(np.arange(1, 5) * 4e-3).tolist(),
+    sampling_strategy=(np.arange(2, 5) * 4e-3).tolist(),
     n_jobs=[
         8,
     ],
@@ -414,11 +414,11 @@ models["balancedRandomForest"] = dict(
 
 models["gradientBoosting"] = dict(
     loss=["log_loss", "exponential"],
-    n_estimators=[10, 50, 100, 200, 500],
+    n_estimators=[3, 5, 7, 11, 19],
     learning_rate=learning_rate,
     subsample=[0.75, 0.85, 1.0],
     criterion="friedman_mse",
-    max_depth=[None, 5, 10, 15, 20, 30],
+    max_depth=[5, 10, 15,],
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     max_features=["sqrt", "log2", None],
@@ -432,7 +432,7 @@ models["histGradientBoosting"] = dict(
     loss=["log_loss"],
     max_iter=[100, 500, 1000, 10000],
     learning_rate=learning_rate,
-    max_depth=[None, 5, 10, 15, 20, 30],
+    max_depth=[5, 10, 15,],
     l2_regularization=C,
     categorical_features=[None],
     random_state=[None],
@@ -446,8 +446,8 @@ models["histGradientBoosting"] = dict(
 )
 
 models["xgboost"] = dict(
-    n_estimators=[10, 20, 50, 75, 100],
-    max_depth=[5, 10, 15, 20, 30],
+    n_estimators=[3, 5, 7, 11, 19],
+    max_depth=[5, 10, 15,],
     learning_rate=[1e-1, 1e-2, 1e-3],
     booster=["gbtree", "dart"],
     n_jobs=[8],

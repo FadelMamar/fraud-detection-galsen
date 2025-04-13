@@ -11,7 +11,7 @@ from .config import (
     COLUMNS_TO_ROBUST_SCALE,
     Arguments,
 )
-from .features import load_transforms_pyod, build_encoder_scalers
+from .features import load_transforms_pyod, build_encoder_scalers, perform_feature_engineering
 from .sampling import data_resampling
 
 
@@ -98,6 +98,7 @@ def data_loader(
     kwargs_tranform_data: dict,
     data_path: str = "../data/training.csv",
     split_method: str = "hold-out",
+    mode:str='train',
     delta_train=40,
     delta_delay=7,
     delta_test=20,
@@ -105,33 +106,58 @@ def data_loader(
     random_state=41,
     sampling_ratio=1.0,
 ) -> tuple:
+    
     # load data
     df_data = load_data(data_path)
 
-    # split data
-    out = train_test_split(
-        df_data,
-        delta_train=delta_train,
-        delta_delay=delta_delay,
-        delta_test=delta_test,
-        method=split_method,
-        random_state=random_state,
-        n_folds=n_folds,
-        sampling_ratio=sampling_ratio,
-    )
+    
+    if mode == 'train':
 
-    if split_method == "hold-out":
-        train_df, val_df = out
-        (X_train, y_train, X_val, y_val), col_transformer = transform_data(
-            train_df=train_df, val_df=val_df, **kwargs_tranform_data
+        # split data
+        out = train_test_split(
+            df_data,
+            delta_train=delta_train,
+            delta_delay=delta_delay,
+            delta_test=delta_test,
+            method=split_method,
+            random_state=random_state,
+            n_folds=n_folds,
+            sampling_ratio=sampling_ratio,
         )
-        return X_train, y_train, X_val, y_val
+                
+        if split_method == "hold-out":
+            train_df, val_df = out
+            (X_train, y_train), col_transformer = transform_data(
+                train_df=train_df, **kwargs_tranform_data
+            )
+            kwargs_tranform_data['col_transformer']=col_transformer
+            (X_val, y_val), col_transformer = transform_data(
+                val_df=val_df, **kwargs_tranform_data
+            )
+            return X_train, y_train, X_val, y_val
 
-    elif split_method == "prequential":
-        (X_train, y_train), col_transformer = transform_data(
-            train_df=df_data, val_df=None, **kwargs_tranform_data
-        )
-        return (X_train, y_train), out, col_transformer
+        elif split_method == "prequential":
+            (X_train, y_train), col_transformer = transform_data(
+                train_df=df_data, **kwargs_tranform_data
+            )
+            return (X_train, y_train), out, col_transformer
+
+    
+    elif mode == 'val':  
+        (X_val, y_val), col_transformer = transform_data(
+                val_df=df_data, **kwargs_tranform_data
+        )  
+        return (X_val, y_val), col_transformer
+    
+    elif mode == 'predict':
+        (X_pred, y), col_transformer = transform_data(
+                pred_df=df_data, **kwargs_tranform_data
+        )  
+        return (X_pred,y), col_transformer
+
+    else:
+        raise NotImplementedError
+
 
 
 class MyDataset(object):
