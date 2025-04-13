@@ -28,7 +28,6 @@ fastjsonschema==2.21.1
 filelock==3.18.0
 fonttools==4.57.0
 fqdn==1.5.1
--e file:///D:/fraud-detection-galsen
 fsspec==2025.3.2
 future==1.0.0
 graphviz==0.20.3
@@ -81,7 +80,6 @@ optuna==4.2.1
 optuna-dashboard==0.18.0
 optuna-integration==4.2.1
 overrides==7.7.0
--e file:///D:/fraud-detection-galsen
 packaging==24.2
 pandas==2.2.3
 pandocfilters==1.5.1
@@ -102,8 +100,6 @@ pyparsing==3.2.3
 python-dateutil==2.9.0.post0
 python-json-logger==3.3.0
 pytz==2025.2
-pywin32==310
-pywinpty==2.0.15
 pyyaml==6.0.2
 pyzmq==26.3.0
 referencing==0.36.2
