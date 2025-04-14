@@ -15,9 +15,11 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         self.customer_stats = None
         self.windows_size_in_days=windows_size_in_days
         self.uid_cols = None
+        self.uid_col_name = 'CustomerUID'
         self.behavioral_drift_cols = ['AccountId',]
         self.session_gap_minutes = session_gap_minutes
         self.n_clusters = n_clusters
+        self.cluster_on_feature = 'CUSTOMER_ID' # str
         self.kmeans = None
 
     def fit(self, df):
@@ -26,26 +28,17 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         self.customer_stats = df.groupby('CUSTOMER_ID')['TX_AMOUNT'].agg(['mean', 'std']).rename(columns={'mean': 'CustomerMeanAmt', 
                                                                                                           'std': 'CustomerStdAmt'})
         
+        self.account_stats['AccountStdAmt'] = self.account_stats['AccountStdAmt'].fillna(1)
+        self.customer_stats['CustomerStdAmt'] = self.customer_stats['CustomerStdAmt'].fillna(1)
+        
         self.product_fraud_rate = df.groupby('ProductId')['TX_FRAUD'].mean().rename('ProductFraudRate')
         self.provider_fraud_rate = df.groupby('ProviderId')['TX_FRAUD'].mean().rename('ProviderFraudRate')
         self.channel_fraud_rate = df.groupby('ChannelId')['TX_FRAUD'].mean().rename('ChannelIdFraudRate')
         
-        #-- Compute clusters
-        cluster_data = df.groupby('CUSTOMER_ID').agg({
-            'Amount': 'mean',
-            'ChannelId': lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan,
-        }).fillna(0)
-
-        # Encode channel as numeric for clustering
-        cluster_data['ChannelId'] = cluster_data['ChannelId'].astype('category').cat.codes
-
-        self.kmeans = MiniBatchKMeans(n_clusters=self.n_clusters, random_state=41,max_iter=500,batch_size=1024)
-        self.kmeans.fit(cluster_data)
-
-        self.customer_cluster_labels = pd.DataFrame({
-            'CUSTOMER_ID': cluster_data.index,
-            'CustomerCluster': self.kmeans.labels_
-        })
+        if self.n_clusters is not None:
+            self._compute_clusters_customers(df)
+        
+        return self             
         
     def transform(self, df):
         df = df.copy()
@@ -56,7 +49,7 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
 
         df = self._add_temporal_features(df)
         df = self._add_account_stats(df)
-        df = self.__add_customer_stats(df)
+        df = self._add_customer_stats(df)
         df = self._compute_behavioral_drift(df)
         df = self._compute_batch_gap_features(df)
         df = self._compute_avg_txn_features(df)
@@ -64,6 +57,10 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         df = self._add_temporal_identity_interactions(df)
         df = self._add_frequency_features(df)
         df = self._add_fraud_rate_features(df)
+        
+        if self.n_clusters is not None:
+            df = self._add_customer_clusters(df)
+            
         df = self._cleanup(df)
 
         return df
@@ -75,36 +72,58 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
     # ---------- Private Helper Methods ----------
     def _create_unique_identifier(self,df:pd.DataFrame):
         
-        df["Customer_UID"] = df[self.uid_cols].apply(
+        df[self.uid_col_name] = df[self.uid_cols].apply(
             lambda x: "+".join(x), axis=1, raw=False, result_type="reduce"
         )
         
         return df
+    
+    def _compute_clusters_customers(self, df)->None:
         
+        #-- Compute clusters
+        cluster_data = df.groupby(self.cluster_on_feature).agg({
+            'TX_AMOUNT': 'mean',
+            'ChannelId': lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan,
+        }).fillna(0)
+
+        # Encode channel as numeric for clustering
+        cluster_data['ChannelId'] = cluster_data['ChannelId'].astype('category').cat.codes
+
+        self.kmeans = MiniBatchKMeans(n_clusters=self.n_clusters, random_state=41,max_iter=500,batch_size=1024)
+        self.kmeans.fit(cluster_data)
+
+        self.customer_cluster_labels = pd.DataFrame({
+            self.cluster_on_feature: cluster_data.index,
+            'CustomerCluster': self.kmeans.labels_
+        })
+    
     def _add_temporal_features(self, df):
         df['Hour'] = df['TX_DATETIME'].dt.hour
         df['DayOfWeek'] = df['TX_DATETIME'].dt.dayofweek
         df['IsWeekend'] = df['DayOfWeek'].isin([5, 6]).astype(int)
         df['IsNight'] = df['Hour'].between(0, 6).astype(int)
         
-        for col in ['AccountId','CustomerId']:
+        for col in ['AccountId','CUSTOMER_ID']:
 
-            df[col+'_TimeSinceLastTxn'] = df.groupby(col)['TX_DATETIME'].diff().dt.total_seconds() / 60
-    
+            df[col+'_TimeSinceLastTxn'] = df.groupby(col)['TX_DATETIME'].diff().dt.total_seconds().fillna(0) / 60
+                        
             df[col+'_Txn1hCount'] = (
-                df.set_index('TX_DATETIME')
-                  .groupby(col)['TRANSACTION_ID']
+                  df.sort_values(by=['TX_DATETIME'])
+                  .set_index('TX_DATETIME').groupby(col)['TRANSACTION_ID']
                   .rolling('1h').count()
                   .reset_index(level=0, drop=True)
+                  .reset_index(level=0,drop=True)
             )
             
             for day in self.windows_size_in_days:
                 df[f'{col}_AvgAmount_{day}day'] = (
-                    df.groupby(col)['TX_AMOUNT']
-                      .rolling(window=day, min_periods=1).mean()
+                    df.sort_values(by=['TX_DATETIME'])
+                      .set_index('TX_DATETIME').groupby(col)['TX_AMOUNT']
+                      .rolling(window=f'{day}d', min_periods=1).mean()
+                      .reset_index(level=0, drop=True)
                       .reset_index(level=0, drop=True)
                 )
-        
+                        
         
         return df
 
@@ -115,7 +134,7 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         return df
     
     def _add_customer_stats(self, df):
-        df = df.merge(self.account_stats, on='CUSTOMER_ID', how='left')
+        df = df.merge(self.customer_stats, on='CUSTOMER_ID', how='left')
         df['CustomerAmountZScore'] = (df['TX_AMOUNT'] - df['CustomerMeanAmt']) / df['CustomerStdAmt'].replace(0, 1)
         df['CustomerAmountOverAvg'] = df['TX_AMOUNT'] / df['AccountMeanAmt'].replace(0, 1)
         return df
@@ -160,8 +179,8 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
             val_30d = df.groupby(col)['TX_AMOUNT'].transform(lambda x: x.rolling('30d').mean())
             df[col+'_RatioTo7dAvg'] = df['TX_AMOUNT'] / val_7d
             df[col+'_RatioTo30dAvg'] = df['TX_AMOUNT'] / val_30d
-            df[col+'_ZScore_7d'] = (df['TX_AMOUNT'] - val_7d) / df.groupby(col)['TX_AMOUNT'].transform(lambda x: x.rolling('7d').std())
-            df[col+'_ZScore_30d'] = (df['TX_AMOUNT'] - val_30d) / df.groupby(col)['TX_AMOUNT'].transform(lambda x: x.rolling('30d').std())            
+            df[col+'_ZScore_7d'] = (df['TX_AMOUNT'] - val_7d) / df.groupby(col)['TX_AMOUNT'].transform(lambda x: x.rolling('7d').std()).replace(0, 1).fillna(1)
+            df[col+'_ZScore_30d'] = (df['TX_AMOUNT'] - val_30d) / df.groupby(col)['TX_AMOUNT'].transform(lambda x: x.rolling('30d').std()).replace(0, 1).fillna(1)          
             
         df.reset_index(inplace=True)
         return df
@@ -183,7 +202,7 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         df = df.sort_values(by=['BatchId', 'TX_DATETIME'])
         batch_time = df.groupby('BatchId')['TX_DATETIME'].min().sort_values()
         batch_time_gap = batch_time.diff().dt.total_seconds().rename('TimeBetweenBatches')
-        txn_per_batch = df.groupby('BatchId')['TransactionId'].count().rename('TxnPerBatch')
+        txn_per_batch = df.groupby('BatchId')['TRANSACTION_ID'].count().rename('TxnPerBatch')
         df = df.merge(txn_per_batch, on='BatchId', how='left')
         df = df.merge(batch_time_gap, left_on='BatchId', right_index=True, how='left')
         return df
@@ -198,12 +217,12 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
             SessionValue=('TX_AMOUNT', 'sum'),
             SessionDuration=('TX_DATETIME', lambda x: (x.max() - x.min()).total_seconds() / 60),
             SessionChannel=('ChannelId', lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan)
-        ).reset_index()
+        ).fillna(0).reset_index()
         df = df.merge(session_stats, on=['AccountId', 'SessionId'], how='left')
         return df
     
     def _add_customer_clusters(self, df):
-        df = df.merge(self.customer_cluster_labels, on='AccountId', how='left')
+        df = df.merge(self.customer_cluster_labels, on=self.cluster_on_feature, how='left')
         df['ClusterChannelInteraction'] = df['CustomerCluster'].astype(str) + '_' + df['ChannelId'].astype(str)
         df['ClusterChannelInteraction'] = df['ClusterChannelInteraction'].astype('category').cat.codes
         return df
