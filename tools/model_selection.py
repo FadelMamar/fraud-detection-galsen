@@ -39,10 +39,11 @@ from fraudetect.sampling import data_resampling
 from fraudetect import import_from_path, sample_cfg
 from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
 from fraudetect.dataset import load_data, MyDatamodule
-
 from sklearn.decomposition import PCA, KernelPCA
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.pipeline import Pipeline
+from fraudetect.modeling.utils import Tuner
+
 try:
     HYP_CONFIGS = import_from_path(
         "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
@@ -51,146 +52,6 @@ except:
     HYP_CONFIGS = import_from_path(
         "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
     )
-
-
-def __prepare_data(
-    data_path: str,
-    kwargs_tranform_data: dict,
-    delta_train=40,
-    delta_delay=7,
-    delta_test=20,
-    random_state=41,
-):
-    # load and transform
-    (X_train, y_train), prequential_split_indices, col_transformer = data_loader(
-        kwargs_tranform_data=kwargs_tranform_data,
-        data_path=data_path,
-        split_method="prequential",
-        delta_train=delta_train,
-        mode='train',
-        delta_delay=delta_delay,
-        delta_test=delta_test,
-        n_folds=1,  # matters if prequential_split_indices are used
-        random_state=random_state,
-        sampling_ratio=1.0,
-    )
-    print("Raw data shape: ", X_train.shape, y_train.shape)
-
-    return X_train, y_train, col_transformer
-
-
-def build_dataset(args: Arguments, verbose=0):
-    if args.cat_encoding_method == "hashing":
-        kwargs = dict(
-            n_components=args.cat_encoding_hash_n_components,
-            hash_method=args.cat_encoding_hash_method,
-        )
-    elif args.cat_encoding_method == "base_n":
-        kwargs = dict(
-            base=args.cat_encoding_base_n,
-        )
-    else:
-        kwargs = dict()
-
-    # load data & do preprocessing
-    col_transformer = build_encoder_scalers(
-        cols_onehot=COLUMNS_TO_ONE_HOT_ENCODE,
-        cols_cat_encode=COLUMNS_TO_CAT_ENCODE,
-        cols_std=COLUMNS_TO_STD_SCALE,
-        cols_robust=COLUMNS_TO_ROBUST_SCALE,
-        cat_encoding_method=args.cat_encoding_method,
-        add_imputer=args.add_imputer,
-        verbose=bool(verbose),
-        add_concat_features_transform=args.concat_features is not None,
-        n_jobs=args.n_jobs,
-        concat_features_encoding_kwargs=args.concat_features_encoding_kwargs,
-        **kwargs,
-    )
-    kwargs_tranform_data = dict(
-        col_transformer=col_transformer,
-        cols_to_drop=COLUMNS_TO_DROP,
-        windows_size_in_days=args.windows_size_in_days,
-        train_transform=None,  # some custom transform applied to X_train,y_train
-        val_transform=None,  # some custom transform applied to X_val,y_val
-        delay_period_accountid=args.delta_delay,
-        concat_features=args.concat_features,
-    )
-    X_train, y_train, col_transformer = __prepare_data(
-        data_path=args.data_path,
-        kwargs_tranform_data=kwargs_tranform_data,
-        delta_train=args.delta_train,
-        delta_delay=args.delta_delay,
-        delta_test=args.delta_test,
-        random_state=args.random_state,
-    )
-
-    # transformed column names
-    # columns_of_transformed_data = list(map(lambda name: name.split('__')[1],
-    #                                         list(col_transformer.get_feature_names_out()))
-    #                                     )
-    columns_of_transformed_data = col_transformer.get_feature_names_out()
-    df_train_preprocessed = pd.DataFrame(X_train, columns=columns_of_transformed_data)
-
-    print("X_train_preprocessed columns: ", df_train_preprocessed.columns)
-
-    return (X_train, y_train), col_transformer
-
-
-# functions to augment data
-def __resample_data(
-    X,
-    y,
-    sampler_names: list[str],
-    sampler_cfgs: list[dict],
-):
-    assert len(sampler_names) == len(sampler_cfgs), "They should have the same length."
-
-    # Re-sample data
-    X, y = data_resampling(
-        X=X, y=y, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
-    )
-    print("Resampled data shape: ", X.shape, y.shape)
-
-    return X, y
-
-
-def __concat_pyod_scores(
-    X,
-    outliers_det_configs: OrderedDict,
-):
-    # load pyod transform and apply it to X
-    transform_pyod, fitted_models_pyod = load_transforms_pyod(
-        X_train=X,
-        outliers_det_configs=outliers_det_configs,
-        fitted_detector_list=None,
-        return_fitted_models=True,
-    )
-
-    return transform_pyod(X=X), fitted_models_pyod
-
-
-def augment_resample_dataset(
-    X,
-    y,
-    outliers_det_configs: OrderedDict | None,
-    sampler_names: list[str] | None,
-    sampler_cfgs: list[dict] | None,
-):
-    # augment data using outliers scores
-    fitted_models_pyod = None
-    if outliers_det_configs is not None:
-        X, fitted_models_pyod = __concat_pyod_scores(
-            X,
-            outliers_det_configs=outliers_det_configs,
-        )
-
-    # resample data
-    if (sampler_names is not None) and (sampler_cfgs is not None):
-        X, y = __resample_data(
-            X=X, y=y, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
-        )
-
-    return (X, y), fitted_models_pyod
 
 
 def __tune_models_hyp(
@@ -318,197 +179,6 @@ def demo(args: Arguments, verbose=0):
     return results
 
 
-class Objective(object):
-    def __init__(self, args: Arguments, 
-                 verbose: int = 0,
-                 cat_encoding_kwards:dict={}):
-        self.args = deepcopy(args)
-        self.pyod_detectors = deepcopy(sorted(self.args.pyod_detectors))
-        self.pyod_choices = [
-            json.dumps(list(k))
-            for k in combinations(self.pyod_detectors, 4
-            )
-        ]
-        self.model_names = deepcopy(args.model_names)
-        self.disable_pyod = deepcopy(args.disable_pyod_outliers)
-        self.disable_samplers = deepcopy(args.disable_samplers)
-        self.verbose = verbose
-        self.count_iter = 0
-
-        self.datamodule = MyDatamodule()
-        feature_engineer = FraudFeatureEngineer(windows_size_in_days=args.windows_size_in_days,
-                                         uid_cols=args.concat_features,
-                                         session_gap_minutes=30,
-                                         n_clusters=None
-                                         )
-
-        encoder = FeatureEncoding(cat_encoding_method=args.cat_encoding_method,
-                                add_imputer=args.add_imputer,
-                                    onehot_threshold=9,
-                                    cols_to_drop=args.cols_to_drop,
-                                    n_jobs=args.n_jobs,
-                                    cat_encoding_kwards=cat_encoding_kwards
-                                    )
-
-        self.datamodule.setup(encoder=encoder, feature_engineer=feature_engineer)
-
-        self.X_train, self.y_train = self.datamodule.get_train_dataset(args.data_path)
-
-        self.best_score = 0.0
-        self.transform_pipeline = None
-        self.ckpt_filename = os.path.join(
-            args.work_dir, args.study_name + "_best-run.joblib"
-        )
-
-    def sample_cfg_optuna(self, trial, name: str, config: dict):
-        _cfg = deepcopy(config)
-
-        for k in _cfg.keys():
-            if not isinstance(_cfg[k], Iterable):
-                continue
-            _cfg[k] = trial.suggest_categorical(name + "__" + k, _cfg[k])
-
-        return _cfg
-
-    def save_checkpoint(self, score: float, results: dict):
-
-        if score >= self.best_score:
-            self.best_score = score
-            vals = [results, self.transform_pipeline, self.datamodule]
-            joblib.dump(vals, self.ckpt_filename)
-
-    def __call__(self, trial):
-        self.count_iter += 1
-
-        X=self.X_train.copy()
-        y=self.y_train.copy()
-
-        self.transform_pipeline = None
-        pipe = []
-
-        # select model
-        model_name = trial.suggest_categorical(
-            "classifier",
-            self.model_names, 
-        )
-        models_config = {model_name: HYP_CONFIGS.models[model_name]}
-
-        # PCA        
-        do_pca = trial.suggest_categorical('pca',[False, self.args.do_pca])
-        if do_pca:
-            n_components = trial.suggest_int('n_components', min(5,self.X_train.shape[1]), self.X_train.shape[1], 3)
-            pca_transform = PCA(n_components=n_components)
-            std_scaler = StandardScaler()
-            pipe = pipe + [("scaler", std_scaler), ("pca", pca_transform)]
-        
-        if len(pipe)>0:
-            self.transform_pipeline = Pipeline(steps=pipe)
-            X = self.transform_pipeline.fit_transform(X=X)
-         
-        
-        # select outlier detector for data aug
-        disable_pyod = trial.suggest_categorical(
-            "disable_pyod", [True, self.disable_pyod]
-        )
-        if disable_pyod:
-            outliers_det_configs = None
-        else:
-            _cfgs = list()
-            pyod_choices = trial.suggest_categorical(
-                "pyod_choices",
-                self.pyod_choices,  # range(1,self.pyod_detectors+1)
-            )
-            pyod_choices = json.loads(pyod_choices)
-            for name in self.pyod_detectors:
-                _cfg = self.sample_cfg_optuna(
-                    trial, name, HYP_CONFIGS.outliers_detectors[name]
-                )
-                if name in pyod_choices:
-                    _cfgs.append(_cfg)
-            outliers_det_configs = OrderedDict(zip(pyod_choices, _cfgs))
-
-        # select samplers
-        sampler_cfgs, sampler_names = None, None
-        if not trial.suggest_categorical(
-            "disable_samplers", [True, self.disable_samplers]
-        ):
-            conbimed_sampler = trial.suggest_categorical(
-                "conbined_sampler",
-                HYP_CONFIGS.combinedsamplers
-                # + [
-                #     None,
-                # ]
-                # * len(HYP_CONFIGS.combinedsamplers),
-            )
-            sampler_names = [
-                conbimed_sampler,
-            ]
-
-            # if conbimed_sampler is None:
-            #     oversampler = trial.suggest_categorical(
-            #         "over_sampler",
-            #         HYP_CONFIGS.oversamplers
-            #         + [
-            #             None,
-            #         ],  # over_sampling is disabled when None is selected
-            #     )
-            #     undersampler = trial.suggest_categorical(
-            #         "under_sampler",
-            #         HYP_CONFIGS.undersamplers,  # always done!
-            #     )
-            #     sampler_names = [oversampler, undersampler]
-            #     sampler_names = [k for k in sampler_names if k is not None]
-
-            # # get samplers' config
-            # sampler_cfgs = []
-            # for name in sampler_names:
-            #     # if name is not None:
-            #     _cfg = {
-            #         name: self.sample_cfg_optuna(
-            #             trial, name, HYP_CONFIGS.samplers[name]
-            #         )
-            #     }
-            #     sampler_cfgs.append(_cfg)
-
-        # augment and resample data on the fly
-        (X, y), fitted_models_pyod = self.datamodule.augment_resample_dataset(
-            X=X,
-            y=y,
-            outliers_det_configs=outliers_det_configs,
-            sampler_names=sampler_names,
-            sampler_cfgs=sampler_cfgs,
-            fitted_detector_list=None
-        )
-
-        # run cv and record
-        # try:
-        results = run(
-            args=self.args,
-            models_config=models_config,
-            X_train=X,
-            y_train=y,
-            save_path=None,
-            verbose=self.verbose,
-        )
-        
-        # wait until run is completed
-        try:
-            score = results[model_name].best_score_
-            results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
-            results["samplers"] = (sampler_names,sampler_cfgs)
-            self.save_checkpoint(score=score, results=results)
-
-        except ValueError:
-            # print("\nError happened in Objective.__call__")
-            traceback.print_exc()
-            # # print(e)
-            print(results, "\n")
-            score = 0
-            
-
-        return score
-
-
 # %%main
 if __name__ == "__main__":
     # Running
@@ -518,17 +188,17 @@ if __name__ == "__main__":
     args.model_names = (
         # "mlp",
         "decisionTree",
-        "logisticReg",
-        # "randomForest",
-        # "balancedRandomForest",
-        # "gradientBoosting",
-        # "histGradientBoosting",
-        # "xgboost",
+        # "logisticReg",
+        "randomForest",
+        "balancedRandomForest",
+        "gradientBoosting",
+        "histGradientBoosting",
+        "xgboost",
     )
 
     current_time = datetime.now().strftime("%H-%M")
 
-    args.study_name = "small-models"
+    args.study_name = "tree-models"
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
     args.optuna_n_trials = 50
@@ -543,39 +213,52 @@ if __name__ == "__main__":
     args.delta_delay = 7
     args.delta_test = 20
 
-    args.random_state = 41 # for data prep
+    args.random_state = 41  # for data prep
 
     args.cols_to_drop = COLUMNS_TO_DROP
 
-    args.do_pca = False # try pca
+    args.do_pca = False  # try pca
     args.do_poly_expansion = False
 
-
     args.disable_pyod_outliers = True
-    args.pyod_detectors = ['abod', 'cblof', 'hbos', 'iforest', 'knn', 'loda', 'mcd', 'mo_gaal']
+    args.pyod_detectors = [
+        "abod",
+        "cblof",
+        "hbos",
+        "iforest",
+        "knn",
+        "loda",
+        "mcd",
+        "mo_gaal",
+    ]
 
     args.sampler_names = None
     args.sampler_cfgs = None
     args.disable_samplers = True
 
-    args.concat_features = None #("AccountId", "CUSTOMER_ID") # ("AccountId", "CUSTOMER_ID") or None
+    args.concat_features = (
+        None  # ("AccountId", "CUSTOMER_ID") # ("AccountId", "CUSTOMER_ID") or None
+    )
     args.concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )
 
-    args.add_imputer = True # handle missing values at prediction time
+    args.add_imputer = True  # handle missing values at prediction time
 
-    args.cat_encoding_method = "hashing" # to handle unknown values effectively
-    args.cat_encoding_hash_n_components = 5  # if cat_encoding_method='hashing'
+    args.cat_encoding_method = "hashing"  # to handle unknown values effectively, 'catboost', 'binary', 'hashing'
+    args.cat_encoding_hash_n_components = 7  # if cat_encoding_method='hashing'
     args.cat_encoding_base_n = 4  # if cat_encoding_method=base_n
     args.windows_size_in_days = (1, 7, 30)
+    cat_encoding_kwards = dict(
+        n_components=args.cat_encoding_hash_n_components
+    )  # used for 'catboost', 'hashing'
 
     # for debugging
     # demo(args=args)
 
     args.work_dir = Path(r"D:\fraud-detection-galsen\runs-optuna")
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    args.work_dir = str(args.work_dir) # for json serialization
+    args.work_dir = str(args.work_dir)  # for json serialization
 
     # using optuna
     study = optuna.create_study(
@@ -588,7 +271,6 @@ if __name__ == "__main__":
 
     # save args
     with open(os.path.join(args.work_dir, args.study_name + ".json"), "w") as file:
-
         cols_preprocessed = dict()
         cols_preprocessed["cols_to_drop"] = COLUMNS_TO_DROP
         cols_preprocessed["cols_one_hot"] = COLUMNS_TO_ONE_HOT_ENCODE
@@ -596,13 +278,11 @@ if __name__ == "__main__":
         cols_preprocessed["cols_to_std_Scale"] = COLUMNS_TO_STD_SCALE
         cols_preprocessed["cols_to_robust_scale"] = COLUMNS_TO_ROBUST_SCALE
 
-        json.dump({'args':args.__dict__,
-                   'cols':cols_preprocessed},
-                   file,
-                   indent=4
-                )
+        json.dump({"args": args.__dict__, "cols": cols_preprocessed}, file, indent=4)
 
-    objective_optuna = Objective(args=args, verbose=0)
+    objective_optuna = Tuner(
+        args=args, verbose=0, cat_encoding_kwards=cat_encoding_kwards
+    )
     study.optimize(
         objective_optuna,
         n_trials=args.optuna_n_trials,

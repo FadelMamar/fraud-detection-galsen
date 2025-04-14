@@ -1,4 +1,4 @@
-#%% init
+# %% init
 # from fraudetect.dataset import load_data
 # from fraudetect.features import perform_feature_engineering
 # from fraudetect.config import (
@@ -30,12 +30,12 @@
 #     windows_size_in_days=[1, 7, 30],
 # )
 
-#%% load configs
+# %% load configs
 # configs = import_from_path(
 #     "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
 # )
 
-#%% Outliers detectors
+# %% Outliers detectors
 # from fraudetect.features import (
 #     fit_outliers_detectors,
 #     concat_outliers_probs_pyod,
@@ -73,7 +73,7 @@
 #     add_confidence=False,
 # )
 
-#%%  Undersampling
+# %%  Undersampling
 
 
 # # under_sampler = TomekLinks(sampling_strategy='majority',n_jobs=4)
@@ -156,7 +156,7 @@
 #     X=X_train, y=y_train, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
 # )
 
-#%% Other
+# %% Other
 
 from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
 from fraudetect.dataset import load_data, MyDatamodule
@@ -176,7 +176,7 @@ COLUMNS_TO_DROP = [
 ]
 
 
-args=Arguments()
+args = Arguments()
 
 args.windows_size_in_days = (1, 7, 30)
 args.cat_encoding_method = "hashing"
@@ -187,26 +187,28 @@ encoding_kwargs = dict(n_components=14)
 
 datamodule = MyDatamodule()
 
-feature_engineer = FraudFeatureEngineer(windows_size_in_days=args.windows_size_in_days,
-                                         uid_cols=None,
-                                         session_gap_minutes=30,
-                                         n_clusters=8
-                                         )
+feature_engineer = FraudFeatureEngineer(
+    windows_size_in_days=args.windows_size_in_days,
+    uid_cols=None,
+    session_gap_minutes=30,
+    n_clusters=8,
+)
 
-encoder = FeatureEncoding(cat_encoding_method=args.cat_encoding_method,
-                          add_imputer=args.add_imputer,
-                            onehot_threshold=9,
-                            cols_to_drop=COLUMNS_TO_DROP,
-                            n_jobs=1,
-                            cat_encoding_kwards=encoding_kwargs
-                            )
+encoder = FeatureEncoding(
+    cat_encoding_method=args.cat_encoding_method,
+    add_imputer=args.add_imputer,
+    onehot_threshold=9,
+    cols_to_drop=COLUMNS_TO_DROP,
+    n_jobs=1,
+    cat_encoding_kwards=encoding_kwargs,
+)
 
 datamodule.setup(encoder=encoder, feature_engineer=feature_engineer)
 
 
-X_train,y = datamodule.get_train_dataset(args.data_path)
+X_train, y = datamodule.get_train_dataset(args.data_path)
 
-X_pred,_ = datamodule.get_predict_dataset(r"D:\fraud-detection-galsen\data\test.csv")
+X_pred, _ = datamodule.get_predict_dataset(r"D:\fraud-detection-galsen\data\test.csv")
 
 
 # train_raw_data = load_data("../data/training.csv")

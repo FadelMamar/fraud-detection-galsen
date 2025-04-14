@@ -11,7 +11,7 @@ from category_encoders import BinaryEncoder, CountEncoder, HashingEncoder, BaseN
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, FeatureUnion
 
 
 def get_customer_spending_behaviour_features(
@@ -164,7 +164,9 @@ def build_encoder_scalers(
     # Imputer
     imputer = Pipeline(steps=[("imputer", KNNImputer(n_neighbors=5))])
     # cat variables
-    onehot_encoder = Pipeline(steps=[("onehot", OneHotEncoder(handle_unknown='ignore'))])
+    onehot_encoder = Pipeline(
+        steps=[("onehot", OneHotEncoder(handle_unknown="ignore"))]
+    )
     cat_encoder = Pipeline(
         steps=[
             (
@@ -288,13 +290,13 @@ def perform_feature_engineering(
                 x, windows_size_in_days=windows_size_in_days, feature="concat_features"
             )
         )
-    y=None
-    if mode in ['train','val']:
+    y = None
+    if mode in ["train", "val"]:
         # Labels
         y = df_data["TX_FRAUD"]
         # Features
         df_data.drop(columns=["TX_FRAUD"], inplace=True)
-        
+
     X = df_data
 
     # Drop unneeded_columns
@@ -310,28 +312,22 @@ def perform_feature_engineering(
     return X_preprocessed, y
 
 
-# TODO: fits feature selector on df_train
-def feature_selector(
-    df_train,
-) -> callable:
-    pass
-
-
 def transform_data(
     col_transformer: ColumnTransformer,
     cols_to_drop: list | None,
-    train_df: pd.DataFrame|None=None,
-    val_df: pd.DataFrame | None=None,
-    pred_df:pd.DataFrame | None=None,
+    train_df: pd.DataFrame | None = None,
+    val_df: pd.DataFrame | None = None,
+    pred_df: pd.DataFrame | None = None,
     train_transform=None,
     val_transform=None,
     delay_period_accountid: int = 7,
     windows_size_in_days=[1, 7, 30],
     concat_features: list = None,
 ) -> tuple:
-    
-    assert (train_df is None) + (val_df is None) + (pred_df is None) == 2, "Exactly one of [train_df,val_df,pred_df] should be given"
-    
+    assert (train_df is None) + (val_df is None) + (pred_df is None) == 2, (
+        "Exactly one of [train_df,val_df,pred_df] should be given"
+    )
+
     if train_df is not None:
         X_train, y_train = perform_feature_engineering(
             train_df,
@@ -344,7 +340,7 @@ def transform_data(
         )
         if train_transform is not None:
             X_train = train_transform(X_train)
-        
+
         return (X_train, y_train), col_transformer
 
     if val_df is not None:
@@ -360,8 +356,8 @@ def transform_data(
         if val_transform is not None:
             X_val = val_transform(X_val)
 
-        return (X_val, y_val),col_transformer
-    
+        return (X_val, y_val), col_transformer
+
     if pred_df is not None:
         X_pred, y = perform_feature_engineering(
             pred_df,
@@ -374,48 +370,38 @@ def transform_data(
         )
         if val_transform is not None:
             X_pred = val_transform(X_pred)
-        
-        return (X_pred,y), col_transformer
 
+        return (X_pred, y), col_transformer
 
 
 def fit_outliers_detectors(
     detector_list: list[BaseDetector], X_train: np.ndarray
-) -> list[BaseDetector]:
-    model_list_ = list()
-
-    for model in tqdm(detector_list, desc="fitting-outliers-det-pyod"):
-        model.fit(X_train)
-        model_list_.append(model)
-
-    return model_list_
+) -> list[BaseDetector] | FeatureUnion:
+    if isinstance(detector_list, list):
+        model_list = list()
+        for model in tqdm(detector_list, desc="fitting-outliers-det-pyod"):
+            model.fit(X_train)
+            model_list.append(model)
+        return model_list
+    else:
+        chain_pyod = FeatureUnion(detector_list, n_jobs=4)
+        chain_pyod.fit(X=X_train, y=None)
+        return chain_pyod
 
 
 def concat_outliers_scores_pyod(
-    fitted_detector_list: list[BaseDetector],
+    fitted_detector_list: list[BaseDetector] | FeatureUnion,
     X: np.ndarray,
-    # method="unify",
-    # add_confidence: bool = False,
 ):
-    probs = []
+    if isinstance(fitted_detector_list, list):
+        for model in tqdm(fitted_detector_list, desc="concat-outliers-scores-pyod"):
+            score = model.decision_function(X)
+            score = score.reshape((-1, 1))
+        X_t = np.hstack([X] + score)
+        return X_t
 
-    for model in tqdm(fitted_detector_list, desc="concat-outliers-scores-pyod"):
-        score = model.decision_function(X)
-        score = score.reshape((-1, 1))
-
-        # if add_confidence:
-        #     prob, cnf = score
-        #     probs.append(cnf.reshape((-1, 1)))
-        # else:
-        #     prob = score
-
-        # probs.append(
-        #     prob[:, 1].reshape((-1, 1))
-        # )  # prob is shape[m,2] (prob normal, prob outlier)
-
-    X_t = np.hstack([X] + score)
-
-    return X_t
+    else:
+        raise NotImplementedError
 
 
 def load_transforms_pyod(

@@ -4,15 +4,7 @@ import pandas as pd
 from collections import OrderedDict
 from .helpers import get_train_test_set, prequentialSplit
 from .features import transform_data
-from .config import (
-    COLUMNS_TO_DROP,
-    COLUMNS_TO_ONE_HOT_ENCODE,
-    COLUMNS_TO_CAT_ENCODE,
-    COLUMNS_TO_STD_SCALE,
-    COLUMNS_TO_ROBUST_SCALE,
-    Arguments,
-)
-from .features import load_transforms_pyod, build_encoder_scalers
+from .features import load_transforms_pyod
 from .sampling import data_resampling
 from .preprocessing import FraudFeatureEngineer, FeatureEncoding
 
@@ -33,9 +25,14 @@ def load_data(data_path: str = "../data/training.csv") -> pd.DataFrame:
         "TransactionId": "TRANSACTION_ID",
     }
     df_data.rename(columns=rename_cols, inplace=True)
-    
+
     try:
-        df_data.rename(columns={"FraudResult": "TX_FRAUD",},inplace=True)    
+        df_data.rename(
+            columns={
+                "FraudResult": "TX_FRAUD",
+            },
+            inplace=True,
+        )
         df_data["TX_FRAUD"] = df_data["TX_FRAUD"].astype("UInt8")
     except:
         print("There is no column FraudResult in loaded data.")
@@ -104,7 +101,7 @@ def data_loader(
     kwargs_tranform_data: dict,
     data_path: str = "../data/training.csv",
     split_method: str = "hold-out",
-    mode:str='train',
+    mode: str = "train",
     delta_train=40,
     delta_delay=7,
     delta_test=20,
@@ -112,13 +109,10 @@ def data_loader(
     random_state=41,
     sampling_ratio=1.0,
 ) -> tuple:
-    
     # load data
     df_data = load_data(data_path)
 
-    
-    if mode == 'train':
-
+    if mode == "train":
         # split data
         out = train_test_split(
             df_data,
@@ -130,13 +124,13 @@ def data_loader(
             n_folds=n_folds,
             sampling_ratio=sampling_ratio,
         )
-                
+
         if split_method == "hold-out":
             train_df, val_df = out
             (X_train, y_train), col_transformer = transform_data(
                 train_df=train_df, **kwargs_tranform_data
             )
-            kwargs_tranform_data['col_transformer']=col_transformer
+            kwargs_tranform_data["col_transformer"] = col_transformer
             (X_val, y_val), col_transformer = transform_data(
                 val_df=val_df, **kwargs_tranform_data
             )
@@ -149,17 +143,17 @@ def data_loader(
             return (X_train, y_train), out, col_transformer
         else:
             raise NotImplementedError
- 
-    elif mode == 'val':  
+
+    elif mode == "val":
         (X_val, y_val), col_transformer = transform_data(
-                val_df=df_data, **kwargs_tranform_data
-        )  
+            val_df=df_data, **kwargs_tranform_data
+        )
         return (X_val, y_val), col_transformer
-    
-    elif mode == 'predict':
+
+    elif mode == "predict":
         (X_pred, y), col_transformer = transform_data(
-                pred_df=df_data, **kwargs_tranform_data
-        )  
+            pred_df=df_data, **kwargs_tranform_data
+        )
         return (X_pred, y), col_transformer
 
     else:
@@ -167,30 +161,28 @@ def data_loader(
 
 
 class MyDatamodule(object):
-    def __init__(self,):
-                
+    def __init__(
+        self,
+    ):
         self.encoder = None
         self.feature_engineer = None
-                
-                
-    def setup(self,encoder:FeatureEncoding,feature_engineer:FraudFeatureEngineer):
+
+    def setup(self, encoder: FeatureEncoding, feature_engineer: FraudFeatureEngineer):
         self.encoder = deepcopy(encoder)
         self.feature_engineer = deepcopy(feature_engineer)
 
     def get_train_dataset(self, data_path):
-        
         raw_data = load_data(data_path)
-        df_augmented = self.feature_engineer.fit_transform(raw_data) 
-        X,y = self.encoder.fit_transform(X=df_augmented)
-                  
+        df_augmented = self.feature_engineer.fit_transform(raw_data)
+        X, y = self.encoder.fit_transform(X=df_augmented)
+
         return X, y
-    
-    def get_predict_dataset(self, data_path:str):
-        
+
+    def get_predict_dataset(self, data_path: str):
         raw_data = load_data(data_path)
-        df_augmented = self.feature_engineer.transform(raw_data) 
-        X,y= self.encoder.transform(X=df_augmented)        
-        
+        df_augmented = self.feature_engineer.transform(raw_data)
+        X, y = self.encoder.transform(X=df_augmented)
+
         return X, y
 
     def _resample_data(
@@ -235,7 +227,6 @@ class MyDatamodule(object):
         sampler_cfgs: list[dict] | None,
         fitted_detector_list: list = None,
     ):
-        
         # augment data using outliers scores
         fitted_models_pyod = None
         if outliers_det_configs is not None:
@@ -253,9 +244,3 @@ class MyDatamodule(object):
             print("Resampled data shape: ", X.shape, y.shape)
 
         return (X, y), fitted_models_pyod
-
-
-
-
-
-

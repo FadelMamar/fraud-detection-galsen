@@ -262,19 +262,17 @@ def _run(
 
     return best_results
 
+
 class Tuner(object):
-    def __init__(self, args: Arguments,
-                 verbose: int = 0,
-                 cat_encoding_kwards:dict={}):
-        
+    def __init__(
+        self, args: Arguments, verbose: int = 0, cat_encoding_kwards: dict = {}
+    ):
         self.HYP_CONFIGS = None
 
         self.args = deepcopy(args)
         self.pyod_detectors = deepcopy(sorted(self.args.pyod_detectors))
         self.pyod_choices = [
-            json.dumps(list(k))
-            for k in combinations(self.pyod_detectors, 4
-            )
+            json.dumps(list(k)) for k in combinations(self.pyod_detectors, 4)
         ]
         self.model_names = deepcopy(args.model_names)
         self.disable_pyod = deepcopy(args.disable_pyod_outliers)
@@ -283,19 +281,21 @@ class Tuner(object):
         self.count_iter = 0
 
         self.datamodule = MyDatamodule()
-        feature_engineer = FraudFeatureEngineer(windows_size_in_days=args.windows_size_in_days,
-                                         uid_cols=args.concat_features,
-                                         session_gap_minutes=30,
-                                         n_clusters=None
-                                         )
+        feature_engineer = FraudFeatureEngineer(
+            windows_size_in_days=args.windows_size_in_days,
+            uid_cols=args.concat_features,
+            session_gap_minutes=30,
+            n_clusters=None,
+        )
 
-        encoder = FeatureEncoding(cat_encoding_method=args.cat_encoding_method,
-                                add_imputer=args.add_imputer,
-                                    onehot_threshold=9,
-                                    cols_to_drop=args.cols_to_drop,
-                                    n_jobs=args.n_jobs,
-                                    cat_encoding_kwards=cat_encoding_kwards
-                                    )
+        encoder = FeatureEncoding(
+            cat_encoding_method=args.cat_encoding_method,
+            add_imputer=args.add_imputer,
+            onehot_threshold=9,
+            cols_to_drop=args.cols_to_drop,
+            n_jobs=args.n_jobs,
+            cat_encoding_kwards=cat_encoding_kwards,
+        )
 
         self.datamodule.setup(encoder=encoder, feature_engineer=feature_engineer)
 
@@ -318,28 +318,22 @@ class Tuner(object):
         return _cfg
 
     def save_checkpoint(self, score: float, results: dict):
-
         if score >= self.best_score:
             self.best_score = score
             vals = [results, self.transform_pipeline, self.datamodule]
             joblib.dump(vals, self.ckpt_filename)
 
-    def load_hyp_conf(self,path_conf:str):
-
+    def load_hyp_conf(self, path_conf: str):
         try:
-            self.HYP_CONFIGS = import_from_path(
-                "hyp_search_conf", path_conf
-            )
+            self.HYP_CONFIGS = import_from_path("hyp_search_conf", path_conf)
         except:
-            self.HYP_CONFIGS = import_from_path(
-                "hyp_search_conf", path_conf
-            )
+            self.HYP_CONFIGS = import_from_path("hyp_search_conf", path_conf)
 
     def __call__(self, trial):
         self.count_iter += 1
 
-        X=self.X_train.copy()
-        y=self.y_train.copy()
+        X = self.X_train.copy()
+        y = self.y_train.copy()
 
         self.transform_pipeline = None
         pipe = []
@@ -347,23 +341,24 @@ class Tuner(object):
         # select model
         model_name = trial.suggest_categorical(
             "classifier",
-            self.model_names, 
+            self.model_names,
         )
         models_config = {model_name: self.HYP_CONFIGS.models[model_name]}
 
-        # PCA        
-        do_pca = trial.suggest_categorical('pca',[False, self.args.do_pca])
+        # PCA
+        do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
         if do_pca:
-            n_components = trial.suggest_int('n_components', min(5,self.X_train.shape[1]), self.X_train.shape[1], 3)
+            n_components = trial.suggest_int(
+                "n_components", min(5, self.X_train.shape[1]), self.X_train.shape[1], 3
+            )
             pca_transform = PCA(n_components=n_components)
             std_scaler = StandardScaler()
             pipe = pipe + [("scaler", std_scaler), ("pca", pca_transform)]
-        
-        if len(pipe)>0:
+
+        if len(pipe) > 0:
             self.transform_pipeline = Pipeline(steps=pipe)
             X = self.transform_pipeline.fit_transform(X=X)
-         
-        
+
         # select outlier detector for data aug
         disable_pyod = trial.suggest_categorical(
             "disable_pyod", [True, self.disable_pyod]
@@ -391,8 +386,7 @@ class Tuner(object):
             "disable_samplers", [True, self.disable_samplers]
         ):
             conbimed_sampler = trial.suggest_categorical(
-                "conbined_sampler",
-                self.HYP_CONFIGS.combinedsamplers
+                "conbined_sampler", self.HYP_CONFIGS.combinedsamplers
             )
             sampler_names = [
                 conbimed_sampler,
@@ -405,7 +399,7 @@ class Tuner(object):
             outliers_det_configs=outliers_det_configs,
             sampler_names=sampler_names,
             sampler_cfgs=sampler_cfgs,
-            fitted_detector_list=None
+            fitted_detector_list=None,
         )
 
         # try:
@@ -417,18 +411,17 @@ class Tuner(object):
             save_path=None,
             verbose=self.verbose,
         )
-        
+
         # trry to get score
         try:
             score = results[model_name].best_score_
             results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
-            results["samplers"] = (sampler_names,sampler_cfgs)
+            results["samplers"] = (sampler_names, sampler_cfgs)
             self.save_checkpoint(score=score, results=results)
 
         except ValueError:
             traceback.print_exc()
             # print(results, "\n")
             score = 0
-            
 
         return score

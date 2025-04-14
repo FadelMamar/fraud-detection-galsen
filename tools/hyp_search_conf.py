@@ -280,6 +280,9 @@ C = [
     1291.5497,
     10000.0,
 ]
+n_estimators = np.linspace(3, 200, 10).round().astype(int).tolist()
+max_depth = np.linspace(3, 30, 10).round().astype(int).tolist()
+
 models["logisticReg"] = dict(
     penalty=["l2"],
     C=C,
@@ -342,25 +345,48 @@ models["sgdClassifier"] = dict(
 )
 
 models["mlp"] = dict(
-    hidden_layer_sizes=[(100,),(100,50),],
-    activation=["relu",],
-    solver=['adam',],
+    hidden_layer_sizes=[
+        (100,),
+        (100, 50),
+    ],
+    activation=[
+        "relu",
+    ],
+    solver=[
+        "adam",
+    ],
     alpha=[1e-1, 1e-2, 1e-3, 1e-4],
     learning_rate_init=[1e-3, 1e-4],
     max_iter=[50, 100, 300, 500],
-    batch_size=['auto',],
-    shuffle=[True,],
-    random_state=[None,],
-    tol=[1e-4,],
-    n_iter_no_change=[10,],
-    beta_1=[0.9,],
-    beta_2=[0.999,],
-    early_stopping=[False,],
+    batch_size=[
+        "auto",
+    ],
+    shuffle=[
+        True,
+    ],
+    random_state=[
+        None,
+    ],
+    tol=[
+        1e-4,
+    ],
+    n_iter_no_change=[
+        10,
+    ],
+    beta_1=[
+        0.9,
+    ],
+    beta_2=[
+        0.999,
+    ],
+    early_stopping=[
+        False,
+    ],
     model=MLPClassifier,
 )
 
 models["decisionTree"] = dict(
-    criterion=["entropy",'gini'],
+    criterion=["entropy", "gini"],
     splitter=["best"],
     max_depth=[5, 10, 15, 20, 25],
     min_samples_split=[2, 3, 4],
@@ -368,27 +394,30 @@ models["decisionTree"] = dict(
     class_weight=[
         "balanced",
     ],
-    max_features=["sqrt", "log2",None],
+    max_features=["sqrt", "log2", None],
     random_state=[None],
     model=DecisionTreeClassifier,
 )
 
 models["randomForest"] = dict(
-    n_estimators=[3, 5, 7, 11, 19],
-    criterion=["entropy",'gini'],
-    max_depth=[5, 10, 15,],
+    n_estimators=n_estimators,
+    criterion=["entropy", "gini"],
+    max_depth=max_depth,
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
-    max_features=["sqrt", "log2",],
+    max_features=[
+        "sqrt",
+        "log2",
+    ],
     random_state=[None],
     model=RandomForestClassifier,
 )
 
 models["balancedRandomForest"] = dict(
-    n_estimators=[3, 5, 7, 11, 19],
-    criterion=["entropy",'gini'],
-    max_depth=[5, 10, 15,],
+    n_estimators=n_estimators,
+    criterion=["entropy", "gini"],
+    max_depth=max_depth,
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
@@ -402,11 +431,15 @@ models["balancedRandomForest"] = dict(
 
 models["gradientBoosting"] = dict(
     loss=["log_loss", "exponential"],
-    n_estimators=[3, 5, 7, 11, 19],
+    n_estimators=n_estimators,
     learning_rate=learning_rate,
     subsample=[0.75, 0.85, 1.0],
     criterion="friedman_mse",
-    max_depth=[5, 10, 15,],
+    max_depth=[
+        5,
+        10,
+        15,
+    ],
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     max_features=["sqrt", "log2", None],
@@ -420,7 +453,11 @@ models["histGradientBoosting"] = dict(
     loss=["log_loss"],
     max_iter=[100, 500, 1000, 10000],
     learning_rate=learning_rate,
-    max_depth=[5, 10, 15,],
+    max_depth=[
+        5,
+        10,
+        15,
+    ],
     l2_regularization=C,
     categorical_features=[None],
     random_state=[None],
@@ -434,8 +471,12 @@ models["histGradientBoosting"] = dict(
 )
 
 models["xgboost"] = dict(
-    n_estimators=[3, 5, 7, 11, 19],
-    max_depth=[5, 10, 15,],
+    n_estimators=n_estimators,
+    max_depth=[
+        5,
+        10,
+        15,
+    ],
     learning_rate=[1e-1, 1e-2, 1e-3],
     booster=["gbtree", "dart"],
     n_jobs=[6],
