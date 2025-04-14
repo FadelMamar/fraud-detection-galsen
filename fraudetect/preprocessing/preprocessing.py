@@ -68,8 +68,7 @@ class FeatureEncoding(TransformerMixin):
         
         self.n_jobs = n_jobs
         
-        # self.y= None
-                
+        
     
     
     def fit(self,X:pd.DataFrame):
