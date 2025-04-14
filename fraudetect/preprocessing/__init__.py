@@ -1,1 +1,1 @@
-from .preprocessing import FraudFeatureEngineer
+from .preprocessing import FraudFeatureEngineer, FeatureEncoding

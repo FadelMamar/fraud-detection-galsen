@@ -1,17 +1,139 @@
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.cluster import MiniBatchKMeans
+from category_encoders import BinaryEncoder, CountEncoder, HashingEncoder, BaseNEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import KNNImputer
+from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
+from sklearn.pipeline import Pipeline
 import pandas as pd
 import numpy as np
 
+def load_cat_encoding(cat_encoding_method: str, **kwargs):
+    cat_encodings = ["binary", "count", "hashing", "base_n"]
 
-class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
+    if cat_encoding_method not in cat_encodings:
+        raise KeyError(f"cat_encoding_method should be in {cat_encodings}")
+
+    if cat_encoding_method == "binary":
+        return BinaryEncoder(
+            handle_missing="value", drop_invariant=False, handle_unknown="value"
+        )
+
+    elif cat_encoding_method == "count":
+        return CountEncoder(
+            handle_missing="value", drop_invariant=False, handle_unknown="value"
+        )
+
+    elif cat_encoding_method == "hashing":
+        return HashingEncoder(return_df=False, drop_invariant=False, **kwargs)
+
+    elif cat_encoding_method == "base_n":
+        return BaseNEncoder(
+            return_df=False,
+            handle_missing="value",
+            drop_invariant=False,
+            handle_unknown="value",
+            **kwargs,
+        )
+
+
+class FeatureEncoding(TransformerMixin):
+    
+    def __init__(self,
+                 cat_encoding_method:str, 
+                 add_imputer:bool=False,
+                 onehot_threshold:int=9,
+                 cols_to_drop:list=None,
+                 n_jobs:int=4,
+                 cat_encoding_kwards:dict=None):
+        
+        self.cols_to_drop = cols_to_drop
+        
+        self.add_imputer = add_imputer
+        self.imputer = KNNImputer(n_neighbors=5)
+        
+        self.cat_encoder = load_cat_encoding(cat_encoding_method=cat_encoding_method,
+                                             **cat_encoding_kwards)
+        
+        self.onehot_encoder = OneHotEncoder(handle_unknown='ignore')
+        self.onehot_threshold = onehot_threshold
+                
+        self.scaler = Pipeline(
+            steps=[("standard", StandardScaler())],
+        )
+        
+        self.columns_of_transformed_data = None 
+        
+        self.col_transformer = None 
+        
+        self.n_jobs = n_jobs
+        
+        # self.y= None
+                
+    
+    
+    def fit(self,X:pd.DataFrame):
+        
+        df = X.copy()
+        
+        # drop columns
+        if self.cols_to_drop is not None:
+            df.drop(columns=self.cols_to_drop, inplace=True)
+        
+        if "TX_FRAUD" in df.columns:
+            # self.y = df["TX_FRAUD"].copy()
+            df.drop(columns=["TX_FRAUD"], inplace=True)
+        
+        # categorical columns
+        cols = df.select_dtypes(include=['object','string']).columns
+        cols_onehot = [col for col in cols if df[col].nunique()<self.onehot_threshold]
+        cols_cat_encode = [col for col in cols if df[col].nunique()>=self.onehot_threshold]
+        
+        # numeric
+        numeric_cols = df.select_dtypes(include=['number']).columns
+        transformers = [
+            ("onehot", self.onehot_encoder, cols_onehot),
+            ("scaled", self.scaler, numeric_cols),
+            ("cat_encode", self.cat_encoder, cols_cat_encode)
+        ]
+        
+        self.col_transformer = ColumnTransformer(transformers, remainder="passthrough", 
+                                                 n_jobs=self.n_jobs, verbose=False
+        )
+                                
+        self.col_transformer.fit(df)
+        
+        self.columns_of_transformed_data = self.col_transformer.get_feature_names_out()
+        
+        return self
+    
+    def transform(self, X:pd.DataFrame, y=None):
+        
+        _X = X.copy()
+        y=None
+        if "TX_FRAUD" in _X.columns:
+            y = _X['TX_FRAUD'].copy()
+            _X.drop(columns=["TX_FRAUD"], inplace=True)
+        
+        _X = self.col_transformer.transform(X=_X)
+        
+        if self.add_imputer:
+            _X = self.imputer.fit_transform(_X)
+            
+        return _X,y
+    
+    def fit_transform(self, X:pd.DataFrame, y=None, **fit_params):
+        self.fit(X=X)
+        return self.transform(X=X)   
+        
+
+class FraudFeatureEngineer(TransformerMixin):
     def __init__(self,windows_size_in_days:list[int]=[1,7,30],
                  uid_cols:list=None,
                  session_gap_minutes:int=30,
                  n_clusters:int=8,
                  ):
-        self.account_stats = None
-        self.product_fraud_rate = None
+        
         self.customer_stats = None
         self.windows_size_in_days=windows_size_in_days
         self.uid_cols = None
@@ -19,28 +141,22 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         self.behavioral_drift_cols = ['AccountId',]
         self.session_gap_minutes = session_gap_minutes
         self.n_clusters = n_clusters
+        self.customer_cluster_labels = None
         self.cluster_on_feature = 'CUSTOMER_ID' # str
         self.kmeans = None
 
-    def fit(self, df):
-        self.account_stats = df.groupby('AccountId')['TX_AMOUNT'].agg(['mean', 'std']).rename(columns={'mean': 'AccountMeanAmt', 
-                                                                                                       'std': 'AccountStdAmt'})
-        self.customer_stats = df.groupby('CUSTOMER_ID')['TX_AMOUNT'].agg(['mean', 'std']).rename(columns={'mean': 'CustomerMeanAmt', 
-                                                                                                          'std': 'CustomerStdAmt'})
-        
-        self.account_stats['AccountStdAmt'] = self.account_stats['AccountStdAmt'].fillna(1)
-        self.customer_stats['CustomerStdAmt'] = self.customer_stats['CustomerStdAmt'].fillna(1)
+    def fit(self,df,y=None):
         
         self.product_fraud_rate = df.groupby('ProductId')['TX_FRAUD'].mean().rename('ProductFraudRate')
         self.provider_fraud_rate = df.groupby('ProviderId')['TX_FRAUD'].mean().rename('ProviderFraudRate')
         self.channel_fraud_rate = df.groupby('ChannelId')['TX_FRAUD'].mean().rename('ChannelIdFraudRate')
         
-        if self.n_clusters is not None:
-            self._compute_clusters_customers(df)
+        # if self.n_clusters is not None:
+            # self._compute_clusters_customers(df)
         
         return self             
         
-    def transform(self, df):
+    def transform(self, df, y=None, **fit_params):
         df = df.copy()
         df = df.sort_values(by=['AccountId', 'TX_DATETIME'])
         
@@ -58,14 +174,17 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         df = self._add_frequency_features(df)
         df = self._add_fraud_rate_features(df)
         
-        if self.n_clusters is not None:
-            df = self._add_customer_clusters(df)
+        # if self.n_clusters is not None:
+        #     df = self._add_customer_clusters(df)
             
         df = self._cleanup(df)
-
+                
+        
+        
+        
         return df
 
-    def fit_transform(self, df):
+    def fit_transform(self, df,y=None):
         self.fit(df)
         return self.transform(df)
 
@@ -128,21 +247,31 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         return df
 
     def _add_account_stats(self, df):
-        df = df.merge(self.account_stats, on='AccountId', how='left')
-        df['AccountAmountZScore'] = (df['TX_AMOUNT'] - df['AccountMeanAmt']) / df['AccountStdAmt'].replace(0, 1)
-        df['AccountAmountOverAvg'] = df['TX_AMOUNT'] / df['AccountMeanAmt'].replace(0, 1)
+        account_stats = df.groupby('AccountId')['TX_AMOUNT'].agg(['mean', 'std']).rename(columns={'mean': 'AccountMeanAmt', 
+                                                                                                       'std': 'AccountStdAmt'})
+        account_stats['AccountStdAmt'] = account_stats['AccountStdAmt'].fillna(1).replace(0, 1)
+        account_stats['AccountMeanAmt'].fillna(0, inplace=True)
+        
+        df = df.merge(account_stats, on='AccountId', how='left')
+        df['AccountAmountZScore'] = (df['TX_AMOUNT'] - df['AccountMeanAmt']) / df['AccountStdAmt']
+        df['AccountAmountOverAvg'] = df['TX_AMOUNT']
         return df
     
     def _add_customer_stats(self, df):
-        df = df.merge(self.customer_stats, on='CUSTOMER_ID', how='left')
-        df['CustomerAmountZScore'] = (df['TX_AMOUNT'] - df['CustomerMeanAmt']) / df['CustomerStdAmt'].replace(0, 1)
-        df['CustomerAmountOverAvg'] = df['TX_AMOUNT'] / df['AccountMeanAmt'].replace(0, 1)
+        customer_stats = df.groupby('CUSTOMER_ID')['TX_AMOUNT'].agg(['mean', 'std']).rename(columns={'mean': 'CustomerMeanAmt', 
+                                                                                                          'std': 'CustomerStdAmt'})
+        customer_stats['CustomerStdAmt'] = customer_stats['CustomerStdAmt'].fillna(1).replace(0, 1)
+        customer_stats['CustomerMeanAmt'].fillna(0, inplace=True)
+        
+        df = df.merge(customer_stats, on='CUSTOMER_ID', how='left')
+        df['CustomerAmountZScore'] = (df['TX_AMOUNT'] - df['CustomerMeanAmt']) / df['CustomerStdAmt']
+        df['CustomerAmountOverAvg'] = df['TX_AMOUNT'] / df['CustomerMeanAmt']
         return df
 
     def _add_categorical_cross_features(self, df):
         df['Channel_ProductCategory'] = df['ChannelId'].astype(str) + "_" + df['ProductCategory'].astype(str)
-        df['ProductCategory_Account'] = df['ProductCategory'].astype(str) + "_" + df['AccountId'].astype(str)
-        df['ProductCategory_Customer'] = df['ProductCategory'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
+        # df['ProductCategory_Account'] = df['ProductCategory'].astype(str) + "_" + df['AccountId'].astype(str)
+        # df['ProductCategory_Customer'] = df['ProductCategory'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
         df['Country_Currency'] = df['CountryCode'].astype(str) + "_" + df['CurrencyCode'].astype(str)
         df['Channel_PricingStrategy'] = df['ChannelId'].astype(str) + "_" + df['PricingStrategy'].astype(str)
         df['Provider_Product'] = df['ProviderId'].astype(str) + "_" + df['ProductId'].astype(str)
@@ -152,10 +281,10 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         df['IsNight_Android'] = df['IsNight'].astype(str) + df['ChannelId'].astype(str)
         df['Weekend_Channel'] = df['IsWeekend'].astype(str) + df['ChannelId'].astype(str)
         df['Hour_Channel'] = df['Hour'].astype(str) + "_" + df['ChannelId'].astype(str)
-        df['Hour_Account'] = df['Hour'].astype(str) + "_" + df['AccountId'].astype(str)
-        df['Hour_Customer'] = df['Hour'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
-        df['DayOfWeek_Account'] = df['DayOfWeek'].astype(str) + "_" + df['AccountId'].astype(str)
-        df['DayOfWeek_Customer'] = df['DayOfWeek'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
+        # df['Hour_Account'] = df['Hour'].astype(str) + "_" + df['AccountId'].astype(str)
+        # df['Hour_Customer'] = df['Hour'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
+        # df['DayOfWeek_Account'] = df['DayOfWeek'].astype(str) + "_" + df['AccountId'].astype(str)
+        # df['DayOfWeek_Customer'] = df['DayOfWeek'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
         df['Country_Hour'] = df['CountryCode'].astype(str) + "_" + df['Hour'].astype(str)
         return df
 
@@ -169,6 +298,12 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         df = df.merge(self.product_fraud_rate, on='ProductId', how='left')
         df = df.merge(self.provider_fraud_rate, on='ProviderId', how='left')
         df = df.merge(self.channel_fraud_rate, on='ChannelId', how='left')
+        # for pred > handle missing values
+        for col in ['ProductFraudRate', 'ProviderFraudRate', 'ChannelIdFraudRate']:
+            _mean = df[col].mean(skipna=True)
+            df[col] = df[col].fillna(_mean)
+            
+            pass
         return df
     
     def _compute_behavioral_drift(self, df):
@@ -201,7 +336,7 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
     def _compute_batch_gap_features(self, df):
         df = df.sort_values(by=['BatchId', 'TX_DATETIME'])
         batch_time = df.groupby('BatchId')['TX_DATETIME'].min().sort_values()
-        batch_time_gap = batch_time.diff().dt.total_seconds().rename('TimeBetweenBatches')
+        batch_time_gap = batch_time.diff().dt.total_seconds().rename('TimeBetweenBatches').fillna(0)
         txn_per_batch = df.groupby('BatchId')['TRANSACTION_ID'].count().rename('TxnPerBatch')
         df = df.merge(txn_per_batch, on='BatchId', how='left')
         df = df.merge(batch_time_gap, left_on='BatchId', right_index=True, how='left')
@@ -231,6 +366,10 @@ class FraudFeatureEngineer(BaseEstimator, TransformerMixin):
         
         df.drop(columns=['AccountMeanAmt', 'AccountStdAmt','CustomerMeanAmt', 'CustomerStdAmt', 'TxnDate'], 
                 inplace=True)
+        
+        df = df.convert_dtypes()
+        
+        df.replace([np.inf, -np.inf], 0, inplace=True)
         
         return df
 
