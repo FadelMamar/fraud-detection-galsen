@@ -24,6 +24,7 @@ from fraudetect import import_from_path
 from ..config import Arguments
 from ..dataset import MyDatamodule
 from ..preprocessing import FeatureEncoding, FraudFeatureEngineer
+from ..preprocessing import feature_selector
 
 
 def evaluate(classifier, X, y):
@@ -265,7 +266,10 @@ def _run(
 
 class Tuner(object):
     def __init__(
-        self, args: Arguments, verbose: int = 0, cat_encoding_kwards: dict = {}
+        self, args: Arguments, 
+        verbose: int = 0, 
+        cat_encoding_kwards: dict = {},
+        feature_selector_kwargs:dict{}
     ):
         self.HYP_CONFIGS = None
 
@@ -279,6 +283,7 @@ class Tuner(object):
         self.disable_samplers = deepcopy(args.disable_samplers)
         self.verbose = verbose
         self.count_iter = 0
+        self.feature_selector_kwargs= feature_selector_kwargs
 
         self.datamodule = MyDatamodule()
         feature_engineer = FraudFeatureEngineer(
@@ -392,7 +397,7 @@ class Tuner(object):
                 conbimed_sampler,
             ]
 
-        # augment and resample data on the fly
+        # augment or resample data on the fly if 
         (X, y), fitted_models_pyod = self.datamodule.augment_resample_dataset(
             X=X,
             y=y,
@@ -401,6 +406,15 @@ class Tuner(object):
             sampler_cfgs=sampler_cfgs,
             fitted_detector_list=None,
         )
+
+        # feature selector:
+        if trial.suggest_categorical(
+            "select_features", [True, self.args.do_feature_selection]
+        ):
+            X = feature_selector(X_train=X,y_train=y,
+                            	cv=TimeSeriesSplit(n_splits=self.args.n_splits,gap=self.args.cv_gap),
+                                **self.feature_selector_kwargs              
+                        )
 
         # try:
         results = _run(

@@ -65,6 +65,7 @@ class Arguments:
     disable_samplers: bool = False
     do_pca: bool = False  #  try pca
     do_poly_expansion: bool = False
+    do_feature_selection:bool = False
     cv_n_iter: int = 20  # for cross validation
     cv_gap: int = 1051 * 5
     cv_method: str = "optuna"

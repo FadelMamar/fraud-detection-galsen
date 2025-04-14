@@ -18,10 +18,12 @@ from category_encoders import (
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.feature_selection import RFECV, SequentialFeatureSelector
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, FeatureUnion
 import pandas as pd
 import numpy as np
+from sklearn.tree import DecisionTreeClassifier
 from ..detectors import get_detector, instantiate_detector
 
 
@@ -63,16 +65,17 @@ def load_cat_encoding(cat_encoding_method: str, **kwargs):
 
 
 def feature_selector(
-    X_train,
-    y_train,
-    estimator,
-    cv,
+    X_train:np.ndarray,
+    y_train:np.ndarray,
+    cv:TimeSeriesSplit=TimeSeriesSplit(n_splits=5),
+    estimator=DecisionTreeClassifier(max_depth=15,max_features='sqrt',random_state=41),
     name: str = "rfecv",
     step: float = 0.1,
     scoring: str | callable = "f1",
     n_jobs: int = 4,
     verbose: bool = False,
 ) -> callable:
+    
     if name == "rfecv":
         selector = RFECV(
             estimator=estimator,
@@ -91,10 +94,11 @@ def feature_selector(
             scoring=scoring,
             cv=cv,
         )
+    else:
+        raise NotImplementedError
 
     selector.fit(X=X_train, y=y_train)
-
-    return selector
+    return selector.transform(X=X_train)
 
 
 # ------------ pyod detectors

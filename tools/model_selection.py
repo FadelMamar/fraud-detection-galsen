@@ -219,6 +219,7 @@ if __name__ == "__main__":
 
     args.do_pca = False  # try pca
     args.do_poly_expansion = False
+    args.do_feature_selection = False
 
     args.disable_pyod_outliers = True
     args.pyod_detectors = [
