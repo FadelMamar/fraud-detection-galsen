@@ -20,12 +20,15 @@ COLUMNS_TO_ONE_HOT_ENCODE = [
     "ChannelId",
     "ProviderId",
 ]
-COLUMNS_TO_CAT_ENCODE = ["ProductCategory", "ProductId", "TX_HOUR"]
+COLUMNS_TO_CAT_ENCODE = ["ProductCategory", 
+                         "ProductId", 
+                        ]
 COLUMNS_TO_STD_SCALE = [
     "TX_DURING_WEEKEND",
     "TX_DURING_NIGHT",
     "Value",
     "TX_AMOUNT",
+    "TX_HOUR"
 ]
 COLUMNS_TO_ROBUST_SCALE = []
 
@@ -54,6 +57,7 @@ class Arguments:
     disable_pyod_outliers:bool = False
     disable_samplers:bool = False
     do_pca:bool=False #  try pca
+    do_poly_expansion:bool=False
     cv_n_iter:int = 20  # for cross validation
     cv_gap:int = 1051 * 5
     cv_method:str = "optuna"
@@ -70,6 +74,8 @@ class Arguments:
         cat_encoding_method="hashing", n_components=14
     )
     optuna_n_trials: int = 50
+
+    cols_to_drop:Sequence[str]=None
     # training parameters
     # max_epochs: int = 50
     # learning_rate: float = 1e-3

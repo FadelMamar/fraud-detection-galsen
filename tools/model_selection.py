@@ -37,9 +37,11 @@ from fraudetect.config import (
 from fraudetect.features import load_transforms_pyod, build_encoder_scalers
 from fraudetect.sampling import data_resampling
 from fraudetect import import_from_path, sample_cfg
+from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
+from fraudetect.dataset import load_data, MyDatamodule
 
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA, KernelPCA
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.pipeline import Pipeline
 try:
     HYP_CONFIGS = import_from_path(
@@ -65,6 +67,7 @@ def __prepare_data(
         data_path=data_path,
         split_method="prequential",
         delta_train=delta_train,
+        mode='train',
         delta_delay=delta_delay,
         delta_test=delta_test,
         n_folds=1,  # matters if prequential_split_indices are used
@@ -316,7 +319,9 @@ def demo(args: Arguments, verbose=0):
 
 
 class Objective(object):
-    def __init__(self, args: Arguments, verbose: int = 0):
+    def __init__(self, args: Arguments, 
+                 verbose: int = 0,
+                 cat_encoding_kwards:dict={}):
         self.args = deepcopy(args)
         self.pyod_detectors = deepcopy(sorted(self.args.pyod_detectors))
         self.pyod_choices = [
@@ -328,12 +333,27 @@ class Objective(object):
         self.disable_pyod = deepcopy(args.disable_pyod_outliers)
         self.disable_samplers = deepcopy(args.disable_samplers)
         self.verbose = verbose
-        self.current_run_result = None
         self.count_iter = 0
 
-        (self.X_train, self.y_train), self.col_transformer = build_dataset(
-            args=args, verbose=verbose
-        )
+        self.datamodule = MyDatamodule()
+        feature_engineer = FraudFeatureEngineer(windows_size_in_days=args.windows_size_in_days,
+                                         uid_cols=args.concat_features,
+                                         session_gap_minutes=30,
+                                         n_clusters=None
+                                         )
+
+        encoder = FeatureEncoding(cat_encoding_method=args.cat_encoding_method,
+                                add_imputer=args.add_imputer,
+                                    onehot_threshold=9,
+                                    cols_to_drop=args.cols_to_drop,
+                                    n_jobs=args.n_jobs,
+                                    cat_encoding_kwards=cat_encoding_kwards
+                                    )
+
+        self.datamodule.setup(encoder=encoder, feature_engineer=feature_engineer)
+
+        self.X_train, self.y_train = self.datamodule.get_train_dataset(args.data_path)
+
         self.best_score = 0.0
         self.transform_pipeline = None
         self.ckpt_filename = os.path.join(
@@ -354,7 +374,7 @@ class Objective(object):
 
         if score >= self.best_score:
             self.best_score = score
-            vals = [results, self.transform_pipeline]
+            vals = [results, self.transform_pipeline, self.datamodule]
             joblib.dump(vals, self.ckpt_filename)
 
     def __call__(self, trial):
@@ -363,22 +383,28 @@ class Objective(object):
         X=self.X_train.copy()
         y=self.y_train.copy()
 
+        self.transform_pipeline = None
+        pipe = []
+
         # select model
         model_name = trial.suggest_categorical(
             "classifier",
-            self.model_names,  # HYP_CONFIGS.models.keys()
+            self.model_names, 
         )
         models_config = {model_name: HYP_CONFIGS.models[model_name]}
 
-        # PCA and std scaling
-        do_pca = trial.suggest_categorical('do_pca',[False, self.args.do_pca])
+        # PCA        
+        do_pca = trial.suggest_categorical('pca',[False, self.args.do_pca])
         if do_pca:
             n_components = trial.suggest_int('n_components', min(5,self.X_train.shape[1]), self.X_train.shape[1], 3)
             pca_transform = PCA(n_components=n_components)
             std_scaler = StandardScaler()
-            self.transform_pipeline = Pipeline(steps=[("scaler", std_scaler), ("pca", pca_transform)])
+            pipe = pipe + [("scaler", std_scaler), ("pca", pca_transform)]
+        
+        if len(pipe)>0:
+            self.transform_pipeline = Pipeline(steps=pipe)
             X = self.transform_pipeline.fit_transform(X=X)
-            
+         
         
         # select outlier detector for data aug
         disable_pyod = trial.suggest_categorical(
@@ -409,48 +435,49 @@ class Objective(object):
             conbimed_sampler = trial.suggest_categorical(
                 "conbined_sampler",
                 HYP_CONFIGS.combinedsamplers
-                + [
-                    None,
-                ]
-                * len(HYP_CONFIGS.combinedsamplers),
+                # + [
+                #     None,
+                # ]
+                # * len(HYP_CONFIGS.combinedsamplers),
             )
             sampler_names = [
                 conbimed_sampler,
             ]
 
-            if conbimed_sampler is None:
-                oversampler = trial.suggest_categorical(
-                    "over_sampler",
-                    HYP_CONFIGS.oversamplers
-                    + [
-                        None,
-                    ],  # over_sampling is disabled when None is selected
-                )
-                undersampler = trial.suggest_categorical(
-                    "under_sampler",
-                    HYP_CONFIGS.undersamplers,  # always done!
-                )
-                sampler_names = [oversampler, undersampler]
-                sampler_names = [k for k in sampler_names if k is not None]
+            # if conbimed_sampler is None:
+            #     oversampler = trial.suggest_categorical(
+            #         "over_sampler",
+            #         HYP_CONFIGS.oversamplers
+            #         + [
+            #             None,
+            #         ],  # over_sampling is disabled when None is selected
+            #     )
+            #     undersampler = trial.suggest_categorical(
+            #         "under_sampler",
+            #         HYP_CONFIGS.undersamplers,  # always done!
+            #     )
+            #     sampler_names = [oversampler, undersampler]
+            #     sampler_names = [k for k in sampler_names if k is not None]
 
-            # get samplers' config
-            sampler_cfgs = []
-            for name in sampler_names:
-                # if name is not None:
-                _cfg = {
-                    name: self.sample_cfg_optuna(
-                        trial, name, HYP_CONFIGS.samplers[name]
-                    )
-                }
-                sampler_cfgs.append(_cfg)
+            # # get samplers' config
+            # sampler_cfgs = []
+            # for name in sampler_names:
+            #     # if name is not None:
+            #     _cfg = {
+            #         name: self.sample_cfg_optuna(
+            #             trial, name, HYP_CONFIGS.samplers[name]
+            #         )
+            #     }
+            #     sampler_cfgs.append(_cfg)
 
         # augment and resample data on the fly
-        (X, y), fitted_models_pyod = augment_resample_dataset(
+        (X, y), fitted_models_pyod = self.datamodule.augment_resample_dataset(
             X=X,
             y=y,
             outliers_det_configs=outliers_det_configs,
             sampler_names=sampler_names,
             sampler_cfgs=sampler_cfgs,
+            fitted_detector_list=None
         )
 
         # run cv and record
@@ -468,8 +495,8 @@ class Objective(object):
         try:
             score = results[model_name].best_score_
             results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
+            results["samplers"] = (sampler_names,sampler_cfgs)
             self.save_checkpoint(score=score, results=results)
-            self.current_run_result = results
 
         except ValueError:
             # print("\nError happened in Objective.__call__")
@@ -491,17 +518,17 @@ if __name__ == "__main__":
     args.model_names = (
         # "mlp",
         "decisionTree",
-        # "logisticReg",
-        "randomForest",
-        "balancedRandomForest",
+        "logisticReg",
+        # "randomForest",
+        # "balancedRandomForest",
         # "gradientBoosting",
         # "histGradientBoosting",
-        "xgboost"
+        # "xgboost",
     )
 
     current_time = datetime.now().strftime("%H-%M")
 
-    args.study_name = "tree-models"
+    args.study_name = "small-models"
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
     args.optuna_n_trials = 50
@@ -511,33 +538,37 @@ if __name__ == "__main__":
     args.cv_method = "optuna"
     args.cv_gap = 1051 * 5
     args.n_splits = 5
-    args.n_jobs = 6
+    args.n_jobs = 4
     args.delta_train = 50
     args.delta_delay = 7
     args.delta_test = 20
 
     args.random_state = 41 # for data prep
 
-    args.do_pca = True # try pca
+    args.cols_to_drop = COLUMNS_TO_DROP
 
-    args.disable_pyod_outliers = False
+    args.do_pca = False # try pca
+    args.do_poly_expansion = False
+
+
+    args.disable_pyod_outliers = True
     args.pyod_detectors = ['abod', 'cblof', 'hbos', 'iforest', 'knn', 'loda', 'mcd', 'mo_gaal']
 
     args.sampler_names = None
     args.sampler_cfgs = None
-    args.disable_samplers = False
+    args.disable_samplers = True
 
-    args.concat_features = None #("AccountId", "CUSTOMER_ID")
+    args.concat_features = None #("AccountId", "CUSTOMER_ID") # ("AccountId", "CUSTOMER_ID") or None
     args.concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )
 
-    args.add_imputer = False
+    args.add_imputer = True # handle missing values at prediction time
 
-    args.cat_encoding_method = "binary"
-    args.cat_encoding_hash_n_components = 8  # if cat_encoding_method='hashing'
+    args.cat_encoding_method = "hashing" # to handle unknown values effectively
+    args.cat_encoding_hash_n_components = 5  # if cat_encoding_method='hashing'
     args.cat_encoding_base_n = 4  # if cat_encoding_method=base_n
-    args.windows_size_in_days = (1, 7, 15, 30)
+    args.windows_size_in_days = (1, 7, 30)
 
     # for debugging
     # demo(args=args)
@@ -575,12 +606,12 @@ if __name__ == "__main__":
     study.optimize(
         objective_optuna,
         n_trials=args.optuna_n_trials,
-        n_jobs=8,
+        n_jobs=1,
         show_progress_bar=True,
         timeout=60 * 60 * 3,
     )
     print(study.best_trial)
 
-    # Save object
+    # Save study.best_trial
     filename = os.path.join(args.work_dir, args.study_name + ".joblib")
-    joblib.dump(objective_optuna, filename)
+    joblib.dump(study.best_trial, filename)

@@ -39,7 +39,6 @@ outliers_detectors["iforest"] = dict(
     detector=IForest,
     n_estimators=[20, 50, 100, 200],
     contamination=_cnt,
-    n_jobs=[8],
     random_state=[41],
 )
 
@@ -75,7 +74,6 @@ outliers_detectors["cblof"] = dict(
         41,
     ],
     use_weights=[False, True],
-    n_jobs=[8],
 )
 
 outliers_detectors["hbos"] = dict(
@@ -102,7 +100,6 @@ outliers_detectors["knn"] = dict(
     algorithm=[
         "auto",
     ],
-    n_jobs=[8],
 )
 
 outliers_detectors["mcd"] = dict(
@@ -197,9 +194,6 @@ samplers["nearmiss"] = dict(
     version=[
         1,
     ],
-    n_jobs=[
-        8,
-    ],
     sampler=NearMiss,
 )
 # oversampling
@@ -235,9 +229,8 @@ samplers["smoteENN"] = dict(
     sampling_strategy=fracs,
     random_state=[41],
     enn=EditedNearestNeighbours(
-        sampling_strategy="majority", n_neighbors=5, kind_sel="all", n_jobs=8
+        sampling_strategy="majority", n_neighbors=5, kind_sel="all", n_jobs=6
     ),
-    n_jobs=[8],
     sampler=SMOTEENN,
 )
 
@@ -366,9 +359,8 @@ models["mlp"] = dict(
     model=MLPClassifier,
 )
 
-
 models["decisionTree"] = dict(
-    criterion=["gini", "entropy",],
+    criterion=["entropy",'gini'],
     splitter=["best"],
     max_depth=[5, 10, 15, 20, 25],
     min_samples_split=[2, 3, 4],
@@ -376,27 +368,26 @@ models["decisionTree"] = dict(
     class_weight=[
         "balanced",
     ],
-    max_features=["sqrt", "log2",],
+    max_features=["sqrt", "log2",None],
     random_state=[None],
     model=DecisionTreeClassifier,
 )
 
 models["randomForest"] = dict(
     n_estimators=[3, 5, 7, 11, 19],
-    criterion=["entropy",],
+    criterion=["entropy",'gini'],
     max_depth=[5, 10, 15,],
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
     max_features=["sqrt", "log2",],
     random_state=[None],
-    n_jobs=[8],
     model=RandomForestClassifier,
 )
 
 models["balancedRandomForest"] = dict(
     n_estimators=[3, 5, 7, 11, 19],
-    criterion=["entropy",],
+    criterion=["entropy",'gini'],
     max_depth=[5, 10, 15,],
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
@@ -406,9 +397,6 @@ models["balancedRandomForest"] = dict(
         None,
     ],
     sampling_strategy=(np.arange(2, 5) * 4e-3).tolist(),
-    n_jobs=[
-        8,
-    ],
     model=BalancedRandomForestClassifier,
 )
 
@@ -450,7 +438,7 @@ models["xgboost"] = dict(
     max_depth=[5, 10, 15,],
     learning_rate=[1e-1, 1e-2, 1e-3],
     booster=["gbtree", "dart"],
-    n_jobs=[8],
+    n_jobs=[6],
     objective=["binary:hinge", "binary:logistic"],
     tree_method=["hist"],
     scale_pos_weight=[1.0, 5.62, 31.62, 177.83, 1000.0],

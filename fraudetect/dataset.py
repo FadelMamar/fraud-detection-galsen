@@ -1,4 +1,5 @@
 import datetime
+from copy import deepcopy
 import pandas as pd
 from collections import OrderedDict
 from .helpers import get_train_test_set, prequentialSplit
@@ -11,8 +12,9 @@ from .config import (
     COLUMNS_TO_ROBUST_SCALE,
     Arguments,
 )
-from .features import load_transforms_pyod, build_encoder_scalers, perform_feature_engineering
+from .features import load_transforms_pyod, build_encoder_scalers
 from .sampling import data_resampling
+from .preprocessing import FraudFeatureEngineer, FeatureEncoding
 
 
 def load_data(data_path: str = "../data/training.csv") -> pd.DataFrame:
@@ -25,13 +27,18 @@ def load_data(data_path: str = "../data/training.csv") -> pd.DataFrame:
     )
     # renaming columns
     rename_cols = {
-        "FraudResult": "TX_FRAUD",
         "Amount": "TX_AMOUNT",
         "CustomerId": "CUSTOMER_ID",
         "TransactionStartTime": "TX_DATETIME",
         "TransactionId": "TRANSACTION_ID",
     }
     df_data.rename(columns=rename_cols, inplace=True)
+    
+    try:
+        df_data.rename(columns={"FraudResult": "TX_FRAUD",},inplace=True)    
+        df_data["TX_FRAUD"] = df_data["TX_FRAUD"].astype("UInt8")
+    except:
+        print("There is no column FraudResult in loaded data.")
 
     # necessary for splitting
     df_data["TX_TIME_DAYS"] = (
@@ -40,7 +47,6 @@ def load_data(data_path: str = "../data/training.csv") -> pd.DataFrame:
 
     # change dtype
     df_data = df_data.convert_dtypes()
-    df_data["TX_FRAUD"] = df_data["TX_FRAUD"].astype("UInt8")
     df_data["CountryCode"] = df_data["CountryCode"].astype(str)
     df_data["PricingStrategy"] = df_data["PricingStrategy"].astype(str)
     df_data["TX_TIME_DAYS"] = df_data["TX_TIME_DAYS"].astype("UInt8")
@@ -134,15 +140,16 @@ def data_loader(
             (X_val, y_val), col_transformer = transform_data(
                 val_df=val_df, **kwargs_tranform_data
             )
-            return X_train, y_train, X_val, y_val
+            return (X_train, y_train, X_val, y_val), col_transformer
 
         elif split_method == "prequential":
             (X_train, y_train), col_transformer = transform_data(
                 train_df=df_data, **kwargs_tranform_data
             )
             return (X_train, y_train), out, col_transformer
-
-    
+        else:
+            raise NotImplementedError
+ 
     elif mode == 'val':  
         (X_val, y_val), col_transformer = transform_data(
                 val_df=df_data, **kwargs_tranform_data
@@ -153,117 +160,40 @@ def data_loader(
         (X_pred, y), col_transformer = transform_data(
                 pred_df=df_data, **kwargs_tranform_data
         )  
-        return (X_pred,y), col_transformer
+        return (X_pred, y), col_transformer
 
     else:
         raise NotImplementedError
 
 
+class MyDatamodule(object):
+    def __init__(self,):
+                
+        self.encoder = None
+        self.feature_engineer = None
+                
+                
+    def setup(self,encoder:FeatureEncoding,feature_engineer:FraudFeatureEngineer):
+        self.encoder = deepcopy(encoder)
+        self.feature_engineer = deepcopy(feature_engineer)
 
-class MyDataset(object):
-    def __init__(self, 
-                 args: Arguments,
-                 cols_to_drop:list[str]=None,
-                 cols_onehot:list[str]=None,
-                 cols_cat_encode:list[str]=None,
-                 cols_std_scale:list[str]=None,
-                 cols_robust_scale:list[str]=None
-                 ):
-        self.args = args
-        self.col_transformer=None
-        self.fitted_models_pyod=None
-        self.cols_to_drop=cols_to_drop
-        self.cols_onehot=cols_onehot,
-        self.cols_cat_encode=cols_cat_encode,
-        self.cols_std=cols_std_scale,
-        self.cols_robust=cols_robust_scale,
+    def get_train_dataset(self, data_path):
+        
+        raw_data = load_data(data_path)
+        df_augmented = self.feature_engineer.fit_transform(raw_data) 
+        X,y = self.encoder.fit_transform(X=df_augmented)
+                  
+        return X, y
+    
+    def get_predict_dataset(self, data_path:str):
+        
+        raw_data = load_data(data_path)
+        df_augmented = self.feature_engineer.transform(raw_data) 
+        X,y= self.encoder.transform(X=df_augmented)        
+        
+        return X, y
 
-    def __prepare_data(
-        self,
-        data_path: str,
-        kwargs_tranform_data: dict,
-        delta_train=40,
-        delta_delay=7,
-        delta_test=20,
-        random_state=41,
-    ):
-        # load and transform
-        (X_train, y_train), prequential_split_indices, self.col_transformer = data_loader(
-            kwargs_tranform_data=kwargs_tranform_data,
-            data_path=data_path,
-            split_method="prequential",
-            delta_train=delta_train,
-            delta_delay=delta_delay,
-            delta_test=delta_test,
-            n_folds=1,  # matters if prequential_split_indices are used
-            random_state=random_state,
-            sampling_ratio=1.0,
-        )
-        print("Raw data shape: ", X_train.shape, y_train.shape)
-
-        return X_train, y_train
-
-    def build_dataset(self, verbose=0):
-        args = self.args
-
-        if args.cat_encoding_method == "hashing":
-            kwargs = dict(
-                n_components=args.cat_encoding_hash_n_components,
-                hash_method=args.cat_encoding_hash_method,
-            )
-        elif args.cat_encoding_method == "base_n":
-            kwargs = dict(
-                base=args.cat_encoding_base_n,
-            )
-        else:
-            kwargs = dict()
-
-        # load data & do preprocessing
-        self.col_transformer = build_encoder_scalers(
-            cols_onehot=self.cols_onehot,
-            cols_cat_encode=self.cols_cat_encode,
-            cols_std=self.cols_std,
-            cols_robust=self.cols_robust,
-            cat_encoding_method=args.cat_encoding_method,
-            add_imputer=args.add_imputer,
-            verbose=bool(verbose),
-            add_concat_features_transform=args.concat_features is not None,
-            n_jobs=args.n_jobs,
-            concat_features_encoding_kwargs=args.concat_features_encoding_kwargs,
-            **kwargs,
-        )
-        kwargs_tranform_data = dict(
-            col_transformer=self.col_transformer,
-            cols_to_drop=self.cols_to_drop,
-            windows_size_in_days=args.windows_size_in_days,
-            train_transform=None,  # some custom transform applied to X_train,y_train
-            val_transform=None,  # some custom transform applied to X_val,y_val
-            delay_period_accountid=args.delta_delay,
-            concat_features=args.concat_features,
-        )
-        X_train, y_train = self.__prepare_data(
-            data_path=args.data_path,
-            kwargs_tranform_data=kwargs_tranform_data,
-            delta_train=args.delta_train,
-            delta_delay=args.delta_delay,
-            delta_test=args.delta_test,
-            random_state=args.random_state,
-        )
-
-        # transformed column names
-        # columns_of_transformed_data = list(map(lambda name: name.split('__')[1],
-        #                                         list(col_transformer.get_feature_names_out()))
-        #                                     )
-        columns_of_transformed_data = self.col_transformer.get_feature_names_out()
-        df_train_preprocessed = pd.DataFrame(
-            X_train, columns=columns_of_transformed_data
-        )
-
-        print("X_train_preprocessed columns: ", df_train_preprocessed.columns)
-
-        return X_train, y_train
-
-    def __resample_data(
+    def _resample_data(
         self,
         X,
         y,
@@ -282,18 +212,18 @@ class MyDataset(object):
 
         return X, y
 
-    def __concat_pyod_scores(
+    def _concat_pyod_scores(
         self, X, outliers_det_configs: OrderedDict, fitted_detector_list: list = None
     ):
         # load pyod transform and apply it to X
-        transform_pyod, self.fitted_models_pyod = load_transforms_pyod(
+        transform_pyod, fitted_models_pyod = load_transforms_pyod(
             X_train=X,
             outliers_det_configs=outliers_det_configs,
             fitted_detector_list=fitted_detector_list,
             return_fitted_models=True,
         )
 
-        return transform_pyod(X=X)
+        return transform_pyod(X=X), fitted_models_pyod
 
     # functions to augment data
     def augment_resample_dataset(
@@ -305,9 +235,11 @@ class MyDataset(object):
         sampler_cfgs: list[dict] | None,
         fitted_detector_list: list = None,
     ):
+        
         # augment data using outliers scores
+        fitted_models_pyod = None
         if outliers_det_configs is not None:
-            X = self.__concat_pyod_scores(
+            X, fitted_models_pyod = self._concat_pyod_scores(
                 X,
                 outliers_det_configs=outliers_det_configs,
                 fitted_detector_list=fitted_detector_list,
@@ -315,8 +247,15 @@ class MyDataset(object):
 
         # resample data
         if (sampler_names is not None) and (sampler_cfgs is not None):
-            X, y = self.__resample_data(
+            X, y = data_resampling(
                 X=X, y=y, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
             )
+            print("Resampled data shape: ", X.shape, y.shape)
 
-        return (X, y)
+        return (X, y), fitted_models_pyod
+
+
+
+
+
+

@@ -127,22 +127,22 @@ def load_cat_encoding(cat_encoding_method: str, **kwargs):
 
     if cat_encoding_method == "binary":
         return BinaryEncoder(
-            handle_missing="value", drop_invariant=True, handle_unknown="value"
+            handle_missing="value", drop_invariant=False, handle_unknown="value"
         )
 
     elif cat_encoding_method == "count":
         return CountEncoder(
-            handle_missing="value", drop_invariant=True, handle_unknown="value"
+            handle_missing="value", drop_invariant=False, handle_unknown="value"
         )
 
     elif cat_encoding_method == "hashing":
-        return HashingEncoder(return_df=False, drop_invariant=True, **kwargs)
+        return HashingEncoder(return_df=False, drop_invariant=False, **kwargs)
 
     elif cat_encoding_method == "base_n":
         return BaseNEncoder(
             return_df=False,
             handle_missing="value",
-            drop_invariant=True,
+            drop_invariant=False,
             handle_unknown="value",
             **kwargs,
         )
@@ -164,7 +164,7 @@ def build_encoder_scalers(
     # Imputer
     imputer = Pipeline(steps=[("imputer", KNNImputer(n_neighbors=5))])
     # cat variables
-    onehot_encoder = Pipeline(steps=[("onehot", OneHotEncoder())])
+    onehot_encoder = Pipeline(steps=[("onehot", OneHotEncoder(handle_unknown='ignore'))])
     cat_encoder = Pipeline(
         steps=[
             (
@@ -318,9 +318,9 @@ def feature_selector(
 
 
 def transform_data(
-    train_df: pd.DataFrame|None,
     col_transformer: ColumnTransformer,
     cols_to_drop: list | None,
+    train_df: pd.DataFrame|None=None,
     val_df: pd.DataFrame | None=None,
     pred_df:pd.DataFrame | None=None,
     train_transform=None,
@@ -330,7 +330,7 @@ def transform_data(
     concat_features: list = None,
 ) -> tuple:
     
-    assert (train_df is None) + (val_df is None) + (pred_df is None) == 2, "Exactly one should be given"
+    assert (train_df is None) + (val_df is None) + (pred_df is None) == 2, "Exactly one of [train_df,val_df,pred_df] should be given"
     
     if train_df is not None:
         X_train, y_train = perform_feature_engineering(
@@ -364,7 +364,7 @@ def transform_data(
     
     if pred_df is not None:
         X_pred, y = perform_feature_engineering(
-            val_df,
+            pred_df,
             col_transformer=col_transformer,
             cols_to_drop=cols_to_drop,
             mode="predict",
@@ -430,7 +430,7 @@ def load_transforms_pyod(
             fitted_detector_list=fitted_detector_list,
         )
         if return_fitted_models:
-            return transform_func, model_list
+            return transform_func, return_fitted_models
         else:
             return transform_func
 
