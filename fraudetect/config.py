@@ -60,6 +60,8 @@ class Arguments:
         "randomForest",
         "histGradientBoosting",
     )
+    session_gap_minutes:int=30
+    onehot_threshold:int=9
     pyod_detectors: Sequence = ("iforest", "cblof", "loda", "knn")
     disable_pyod_outliers: bool = False
     disable_samplers: bool = False

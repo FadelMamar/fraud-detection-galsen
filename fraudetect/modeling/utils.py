@@ -269,7 +269,7 @@ class Tuner(object):
         self, args: Arguments, 
         verbose: int = 0, 
         cat_encoding_kwards: dict = {},
-        feature_selector_kwargs:dict{}
+        feature_selector_kwargs:dict={}
     ):
         self.HYP_CONFIGS = None
 
@@ -284,19 +284,20 @@ class Tuner(object):
         self.verbose = verbose
         self.count_iter = 0
         self.feature_selector_kwargs= feature_selector_kwargs
+        self.selector = None
 
         self.datamodule = MyDatamodule()
         feature_engineer = FraudFeatureEngineer(
             windows_size_in_days=args.windows_size_in_days,
             uid_cols=args.concat_features,
-            session_gap_minutes=30,
+            session_gap_minutes=args.session_gap_minutes,
             n_clusters=None,
         )
 
         encoder = FeatureEncoding(
             cat_encoding_method=args.cat_encoding_method,
             add_imputer=args.add_imputer,
-            onehot_threshold=9,
+            onehot_threshold=args.onehot_threshold,
             cols_to_drop=args.cols_to_drop,
             n_jobs=args.n_jobs,
             cat_encoding_kwards=cat_encoding_kwards,
@@ -325,7 +326,7 @@ class Tuner(object):
     def save_checkpoint(self, score: float, results: dict):
         if score >= self.best_score:
             self.best_score = score
-            vals = [results, self.transform_pipeline, self.datamodule]
+            vals = [results, self.transform_pipeline, self.datamodule, self.selector]
             joblib.dump(vals, self.ckpt_filename)
 
     def load_hyp_conf(self, path_conf: str):
@@ -341,6 +342,7 @@ class Tuner(object):
         y = self.y_train.copy()
 
         self.transform_pipeline = None
+        self.selector = None
         pipe = []
 
         # select model
@@ -411,7 +413,7 @@ class Tuner(object):
         if trial.suggest_categorical(
             "select_features", [True, self.args.do_feature_selection]
         ):
-            X = feature_selector(X_train=X,y_train=y,
+            X, self.selector = feature_selector(X_train=X,y_train=y,
                             	cv=TimeSeriesSplit(n_splits=self.args.n_splits,gap=self.args.cv_gap),
                                 **self.feature_selector_kwargs              
                         )
@@ -426,7 +428,7 @@ class Tuner(object):
             verbose=self.verbose,
         )
 
-        # trry to get score
+        # try to get score
         try:
             score = results[model_name].best_score_
             results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models

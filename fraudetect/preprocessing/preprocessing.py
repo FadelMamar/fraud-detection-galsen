@@ -71,7 +71,7 @@ def feature_selector(
     estimator=DecisionTreeClassifier(max_depth=15,max_features='sqrt',random_state=41),
     name: str = "rfecv",
     step: float = 0.1,
-    scoring: str | callable = "f1",
+    scoring: str = "f1",
     n_jobs: int = 4,
     verbose: bool = False,
 ) -> callable:
@@ -98,7 +98,7 @@ def feature_selector(
         raise NotImplementedError
 
     selector.fit(X=X_train, y=y_train)
-    return selector.transform(X=X_train)
+    return selector.transform(X=X_train), selector
 
 
 # ------------ pyod detectors
