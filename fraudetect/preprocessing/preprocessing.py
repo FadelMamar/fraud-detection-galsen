@@ -18,13 +18,18 @@ from category_encoders import (
     BaseNEncoder,
     CatBoostEncoder,
 )
+import os
+import joblib
+import tempfile
+from joblib import Parallel, delayed
 from sklearn.utils._param_validation import Interval
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.feature_selection import RFECV, SequentialFeatureSelector,SelectKBest,f_classif
-from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.feature_selection import RFECV, SequentialFeatureSelector, SelectKBest, f_classif, mutual_info_classif
+from sklearn.decomposition import PCA
+from sklearn.pipeline import Pipeline, FeatureUnion, make_pipeline
 import pandas as pd
 import numpy as np
 from sklearn.tree import DecisionTreeClassifier
@@ -169,27 +174,32 @@ def load_feature_selector(
 def fit_outliers_detectors(
     detector_list: list[BaseDetector], X_train: np.ndarray
 ) -> list[BaseDetector] | FeatureUnion:
-    if isinstance(detector_list, list):
-        model_list = list()
-        for model in tqdm(detector_list, desc="fitting-outliers-det-pyod"):
-            model.fit(X_train)
-            model_list.append(model)
-        return model_list
-    else:
-        chain_pyod = FeatureUnion(detector_list, n_jobs=4)
-        chain_pyod.fit(X=X_train, y=None)
-        return chain_pyod
+    
+    model_list = list()
+    for model in tqdm(detector_list, desc="fitting-outliers-det-pyod"):
+        model.fit(X_train)
+        model_list.append(model)
+    return model_list
+    
+def compute_score(det:BaseDetector, X):
+    score = det.decision_function(X)
+    return score.reshape(-1, 1)
 
+def fit_detector(det:BaseDetector,X):
+    return det.fit(X)
 
 def concat_outliers_scores_pyod(
     fitted_detector_list: list[BaseDetector] | FeatureUnion,
     X: np.ndarray,
 ):
     if isinstance(fitted_detector_list, list):
+        scores = []
         for model in tqdm(fitted_detector_list, desc="concat-outliers-scores-pyod"):
             score = model.decision_function(X)
             score = score.reshape((-1, 1))
-        X_t = np.hstack([X] + score)
+            scores.append(score)
+            
+        X_t = np.hstack([X] + scores)
         return X_t
 
     else:
@@ -198,7 +208,7 @@ def concat_outliers_scores_pyod(
 
 def load_transforms_pyod(
     X_train: np.ndarray,
-    outliers_det_configs: OrderedDict,
+    outliers_det_configs: dict,
     fitted_detector_list: list[BaseDetector] = None,
     return_fitted_models: bool = False,
 ):
@@ -212,14 +222,14 @@ def load_transforms_pyod(
         else:
             return transform_func
 
-    assert isinstance(outliers_det_configs, OrderedDict), (
-        f"received {type(outliers_det_configs)}"
-    )
+    # assert isinstance(outliers_det_configs, dict), (
+    #     f"received {type(outliers_det_configs)}"
+    # )
 
     model_list = list()
 
     # instantiate detectors
-    names = outliers_det_configs.keys()
+    names = sorted(outliers_det_configs.keys(),reverse=False)
     for name in names:
         detector, cfg = get_detector(name=name, config=outliers_det_configs)
         detector = instantiate_detector(detector, cfg)
@@ -284,6 +294,59 @@ class ColumnDropper(TransformerMixin, BaseEstimator):
         return df
 
 
+class OutlierDetector(TransformerMixin, BaseEstimator):
+
+    _parameter_constraints = {
+        # "detector_list": [
+        #     "array-like",
+        #     Interval(Integral, 1, None, closed="left"),
+        # ],
+        "n_jobs":[int],
+    }
+
+    def __init__(self, 
+                 detector_list: list[BaseDetector]=(None,),
+                 n_jobs:int=1):
+        
+        self.detector_list = detector_list
+        self.n_jobs = n_jobs
+
+    def fit_transform(self, X, y = None, **fit_params):
+        self.fit(X,y,**fit_params)
+        return self.transform(X=X,y=y)
+            
+    @_fit_context(prefer_skip_nested_validation=True)
+    def fit(self,X:pd.DataFrame,y=None,**fit_params):
+        
+        assert all([det is not None for det in self.detector_list]), "Provide detector_list"
+        
+        validate_data(self,X=X,y=y)
+        
+        # print("<Start fitting-outliers-det-pyod/>")
+        # Done by the main thread > avoid race conditions in transform
+        # _ = Parallel(n_jobs=1)([delayed(fit_detector)(det,X) for det in self.detector_list])
+        [det.fit(X) for det in self.detector_list]
+        # print("</End fitting-outliers-det-pyod>") 
+        
+        self.is_fitted_ = True
+                
+        return self
+
+    def transform(self,X,y=None):
+        
+        validate_data(self,X=X,reset=False)
+                
+        # scores = Parallel(n_jobs=self.n_jobs)([delayed(compute_score)(det,X) for det in self.detector_list])
+        scores = [det.decision_function(X).reshape((-1,1)) for det in self.detector_list]
+        
+        if len(scores)>1:
+            scores = np.hstack(scores)       
+        else:
+            scores = scores[0]
+            
+        return scores
+
+
 class AdvancedFeatures(TransformerMixin, BaseEstimator):
 
     _parameter_constraints = {
@@ -296,7 +359,9 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
         "n_jobs":[int],    
         "rfe_step":[int],
         "top_k_best":[int],         
-        "verbose":[bool]
+        "verbose":[bool],
+        "do_pca":[bool],
+        "pca_n_components":[int],
     }
 
     def __init__(self,
@@ -305,9 +370,11 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
                  n_splits=5,
                  cv_gap=5000,
                  n_features_to_select=3,
+                 do_pca:bool=False,
                  rfe_step=3,
                  top_k_best=10,
                  scoring='f1',
+                 pca_n_components:int=20,
                  n_jobs=1,             
                  verbose=False
                  ):
@@ -316,10 +383,16 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
         self.rfe_step=rfe_step
         self.top_k_best=top_k_best
         self.feature_selector_name = feature_selector_name
+        
         self.scoring = scoring
+        
+        self.do_pca = do_pca
+        self.pca_n_components = pca_n_components
+                
         self.n_jobs = n_jobs
         self.n_splits = n_splits
         self.cv_gap = cv_gap
+        
         self.estimator=estimator
         self.verbose=verbose
         
@@ -332,7 +405,16 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
     def fit(self,X,y=None,**fit_params):
                 
         validate_data(self,X=X,y=y)
-        
+            
+        self._pca_transform = None
+        if self.do_pca:
+            n_components = min(self.pca_n_components,X.shape[1])
+            if n_components == X.shape[1]:
+                print(f"Clipping pca_n_components to X.shape[1]={X.shape[1]}")
+                
+            self._pca_transform = make_pipeline(StandardScaler(), PCA(n_components=n_components))
+            X = self._pca_transform.fit_transform(X=X,y=y)
+                   
         cv = TimeSeriesSplit(n_splits=self.n_splits,gap=self.cv_gap)
         self._selector = load_feature_selector(n_features_to_select=self.n_features_to_select,
                                                cv=cv,
@@ -346,6 +428,7 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
                                                )
         self._selector.fit(X=X,y=y)
         
+                
         self.is_fitted_ = True
         
         return self
@@ -353,6 +436,9 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
     def transform(self,X,y=None):
         
         validate_data(self,X=X,reset=False)
+        
+        if self._pca_transform is not None:
+            X = self._pca_transform.transform(X=X)
         
         return self._selector.transform(X=X)
 
@@ -809,7 +895,69 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
 
 
+def load_workflow(raw_data_train,
+                  cols_to_drop,
+                  estimator,
+                  pca_n_components,
+                  detector_list,
+                  session_gap_minutes=60*3,
+                  uid_cols=[None,],
+                  feature_selector_name="selectkbest",
+                  windows_size_in_days=[1,7,30],
+                  cat_encoding_method='binary',
+                  imputer_n_neighbors=9,
+                  n_clusters=8,
+                  top_k_best=10,
+                  do_pca=True,
+                  verbose=False,
+                  n_jobs=2):
+    
+    
+    dropper = ColumnDropper(cols_to_drop=cols_to_drop)
 
+
+    encoder_2 = FeatureEncoding(add_imputer=False,
+                                cat_encoding_method=cat_encoding_method,
+                                imputer_n_neighbors=imputer_n_neighbors,
+                                n_jobs=n_jobs
+                                )
+    
+   
+    feature_engineer = FraudFeatureEngineer(windows_size_in_days=windows_size_in_days,
+                                             uid_cols=uid_cols,
+                                             session_gap_minutes=session_gap_minutes,
+                                             n_clusters=n_clusters
+                                            )
+    
+    
+    pyod_det = OutlierDetector(detector_list=detector_list)
+
+
+    feature_selector = AdvancedFeatures(verbose=verbose,
+                                        estimator=estimator,
+                                        do_pca=do_pca,
+                                        top_k_best=top_k_best,
+                                        pca_n_components=pca_n_components,
+                                        feature_selector_name=feature_selector_name
+                                        )
+    
+
+    concatenator = FeatureUnion(transformer_list=[('pyod_det', pyod_det), 
+                                                  ('feature_selector',feature_selector)],
+                                n_jobs=n_jobs
+                                )
+    
+    # Final Pipeline
+    workflow = Pipeline(steps=[('feature_engineer',feature_engineer),
+                           ('col_dropper',dropper),
+                           ('col_encoder',encoder_2),
+                           ('concat', concatenator),
+                           ]
+                )
+    
+    return workflow
+    
+    
 
 
 

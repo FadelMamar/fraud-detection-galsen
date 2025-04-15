@@ -61,8 +61,7 @@
 # X_t = concat_outliers_probs_pyod(
 #     fitted_detector_list=model_list,
 #     X=X_train,
-#     method="linear",
-#     add_confidence=True,
+
 # )
 
 # outliers_det_configs = OrderedDict(outliers_det_configs)
@@ -236,14 +235,17 @@ COLUMNS_TO_DROP = [
 
 from fraudetect.dataset import load_data
 from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
-from fraudetect.preprocessing.preprocessing import (load_cols_transformer, 
+from fraudetect.preprocessing.preprocessing import (load_cols_transformer,
+                                                    fit_outliers_detectors,
                                                     ColumnDropper, 
                                                     Pipeline, 
+                                                    FeatureUnion,
+                                                    OutlierDetector,
                                                     AdvancedFeatures)
 from fraudetect import import_from_path, sample_cfg
 
 from fraudetect.modeling.utils import get_model, sample_model_cfg, instantiate_model
-
+from fraudetect.detectors import get_detector, instantiate_detector
 import sklearn
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
@@ -277,16 +279,10 @@ dropper = ColumnDropper(cols_to_drop=COLUMNS_TO_DROP)
 
 y_train = raw_data_train['TX_FRAUD']
 
-# v0
-# X,y = dropper.fit_transform(raw_data_train,)
-
-# encoder = load_cols_transformer(df=X)
-# X_train = encoder.fit_transform(X=X,y=None)
-
 
 # v2
 encoder_2 = FeatureEncoding(add_imputer=False,
-                            cat_encoding_method='catboost',
+                            cat_encoding_method='binary',
                             imputer_n_neighbors=9,
                             n_jobs=4
                             )
@@ -303,24 +299,46 @@ feature_engineer = FraudFeatureEngineer(windows_size_in_days=[1,7,30],
                                          session_gap_minutes=60*3,
                                          n_clusters=8
                                         )
-
 # X_ = feature_engineer.fit_transform(X=raw_data_train)
 
 
 # v5
-# pipe2 = Pipeline(steps=[('feature_engineer',feature_engineer),
-#                        ('col_dropper',dropper),
-#                        ('col_encoder',encoder_2)
-#                 ]
-#             )
+pipe2 = Pipeline(steps=[('feature_engineer',feature_engineer),
+                       ('col_dropper',dropper),
+                       ('col_encoder',encoder_2)
+                ]
+            )
 
 
-# X_all = pd.concat([raw_data_train,raw_data_pred],axis=0).reset_index(level=0,drop=True)
+X_all = pd.concat([raw_data_train,raw_data_pred],axis=0).reset_index(level=0,drop=True)
 
-# X_train = pipe2.fit_transform(X=X_all)
-# X_train = X_train[:len(raw_data_train),:]
+X_all = pipe2.fit_transform(X=X_all,y=None)
+X_train = X_all[:len(raw_data_train),:]
 
 # X_pred = pipe2.transform(X=raw_data_pred)
+
+
+
+model_list = list()
+# names = CONFIGS.outliers_detectors.keys()
+names = ["cblof", "iforest"]
+names = sorted(names)
+outliers_det_configs = dict()
+
+for name in names:
+    detector, cfg = get_detector(name=name, config=CONFIGS.outliers_detectors)
+    cfg = sample_cfg(cfg)
+    detector = instantiate_detector(detector, cfg)
+    model_list.append(detector)
+
+    cfg["detector"] = CONFIGS.outliers_detectors[name]["detector"]
+    outliers_det_configs[name] = cfg
+
+
+# fit_outliers_detectors(detector_list=zip(names,model_list), X_train=X_train)
+
+pyod_det = OutlierDetector(detector_list=model_list)
+# det_scores = pyod_det.fit_transform(X=X_train, y=None)
 
 
 # Feature selection
@@ -330,11 +348,17 @@ estimator = DecisionTreeClassifier(max_depth=15,
 
 feature_selector = AdvancedFeatures(verbose=True,
                                     estimator=estimator,
+                                    do_pca=True,
+                                    top_k_best=10,
+                                    pca_n_components=20,
                                     feature_selector_name="selectkbest"
                                     )
-
 # X_selected = feature_selector.fit_transform(X=X_train,y=y_train)
 
+concatenator = FeatureUnion(transformer_list=[('pyod_det',pyod_det), ('feature_selector',feature_selector)],
+                            n_jobs=2
+                            )
+X_pyod = concatenator.fit_transform(X=X_train,y=y_train)
 
 # load model
 model, model_cfg = get_model('logisticReg', CONFIGS.models)
@@ -343,21 +367,25 @@ model = instantiate_model(model, **model_cfg)
 
 # Create a temporary folder to store the transformers of the pipeline
 location = "cachedir"
-memory = Memory(location=location, verbose=10)
+memory = Memory(location=location, verbose=1)
 
 # Final Pipeline
 workflow = Pipeline(steps=[('feature_engineer',feature_engineer),
                        ('col_dropper',dropper),
                        ('col_encoder',encoder_2),
-                       ('feature_selector',feature_selector),
-                       ('model', model)
-                ]
+                       # ('feature_selector',feature_selector),
+                       ('concat',concatenator),
+                       # ('model', model),
+                       ],
+                    # memory=memory
             )
 
-score = workflow.fit(X=raw_data_train, y=y_train).score(X=raw_data_train,y=y_train)
+X_processed = workflow.fit_transform(X=raw_data_train, y=y_train)
+
+# score = workflow.fit(X=raw_data_train, y=y_train).score(X=raw_data_train,y=y_train)
 
 # Delete the temporary cache before exiting
-memory.clear(warn=False)
-rmtree(location)
+# memory.clear(warn=False)
+# rmtree(location)
  
 
