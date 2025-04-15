@@ -24,7 +24,7 @@ from fraudetect import import_from_path
 from ..config import Arguments
 from ..dataset import MyDatamodule
 from ..preprocessing import FeatureEncoding, FraudFeatureEngineer
-from ..preprocessing import feature_selector
+from ..preprocessing import load_feature_selector
 
 
 def evaluate(classifier, X, y):
@@ -410,13 +410,13 @@ class Tuner(object):
         )
 
         # feature selector:
-        if trial.suggest_categorical(
-            "select_features", [True, self.args.do_feature_selection]
-        ):
-            X, self.selector = feature_selector(X_train=X,y_train=y,
-                            	cv=TimeSeriesSplit(n_splits=self.args.n_splits,gap=self.args.cv_gap),
-                                **self.feature_selector_kwargs              
-                        )
+        # if trial.suggest_categorical(
+        #     "select_features", [True, self.args.do_feature_selection]
+        # ):
+        #     X, self.selector = feature_selector(X_train=X,y_train=y,
+        #                     	cv=TimeSeriesSplit(n_splits=self.args.n_splits,gap=self.args.cv_gap),
+        #                         **self.feature_selector_kwargs              
+        #                 )
 
         # try:
         results = _run(

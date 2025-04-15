@@ -240,10 +240,19 @@ from fraudetect.preprocessing.preprocessing import (load_cols_transformer,
                                                     ColumnDropper, 
                                                     Pipeline, 
                                                     AdvancedFeatures)
+from fraudetect import import_from_path, sample_cfg
+
+from fraudetect.modeling.utils import get_model, sample_model_cfg, instantiate_model
+
 import sklearn
 import pandas as pd
 from sklearn.tree import DecisionTreeClassifier
+from shutil import rmtree
+from joblib import Memory
 
+CONFIGS = import_from_path(
+    "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
+)
 
 raw_data_train = load_data(r"D:\fraud-detection-galsen\data\training.csv")
 
@@ -276,7 +285,11 @@ y_train = raw_data_train['TX_FRAUD']
 
 
 # v2
-encoder_2 = FeatureEncoding(add_imputer=False)
+encoder_2 = FeatureEncoding(add_imputer=False,
+                            cat_encoding_method='catboost',
+                            imputer_n_neighbors=9,
+                            n_jobs=4
+                            )
 # X_ = encoder_2.fit_transform(X=raw_data_train)
 
 
@@ -295,19 +308,19 @@ feature_engineer = FraudFeatureEngineer(windows_size_in_days=[1,7,30],
 
 
 # v5
-pipe2 = Pipeline(steps=[('feature_engineer',feature_engineer),
-                       ('col_dropper',dropper),
-                       ('col_encoder',encoder_2)
-                ]
-            )
+# pipe2 = Pipeline(steps=[('feature_engineer',feature_engineer),
+#                        ('col_dropper',dropper),
+#                        ('col_encoder',encoder_2)
+#                 ]
+#             )
 
 
-X_all = pd.concat([raw_data_train,raw_data_pred],axis=0).reset_index(level=0,drop=True)
+# X_all = pd.concat([raw_data_train,raw_data_pred],axis=0).reset_index(level=0,drop=True)
 
-X_train = pipe2.fit_transform(X=X_all)
-X_train = X_train[:len(raw_data_train),:]
+# X_train = pipe2.fit_transform(X=X_all)
+# X_train = X_train[:len(raw_data_train),:]
 
-X_pred = pipe2.transform(X=raw_data_pred)
+# X_pred = pipe2.transform(X=raw_data_pred)
 
 
 # Feature selection
@@ -320,9 +333,31 @@ feature_selector = AdvancedFeatures(verbose=True,
                                     feature_selector_name="selectkbest"
                                     )
 
-feature_selector.fit_transform(X=X_train,y=y_train)
+# X_selected = feature_selector.fit_transform(X=X_train,y=y_train)
 
 
+# load model
+model, model_cfg = get_model('logisticReg', CONFIGS.models)
+model_cfg = sample_model_cfg(model_cfg)
+model = instantiate_model(model, **model_cfg)
 
+# Create a temporary folder to store the transformers of the pipeline
+location = "cachedir"
+memory = Memory(location=location, verbose=10)
 
+# Final Pipeline
+workflow = Pipeline(steps=[('feature_engineer',feature_engineer),
+                       ('col_dropper',dropper),
+                       ('col_encoder',encoder_2),
+                       ('feature_selector',feature_selector),
+                       ('model', model)
+                ]
+            )
+
+score = workflow.fit(X=raw_data_train, y=y_train).score(X=raw_data_train,y=y_train)
+
+# Delete the temporary cache before exiting
+memory.clear(warn=False)
+rmtree(location)
+ 
 

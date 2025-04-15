@@ -30,7 +30,7 @@ import numpy as np
 from sklearn.tree import DecisionTreeClassifier
 from ..detectors import get_detector, instantiate_detector
 
-# sklearn.set_config(enable_metadata_routing=True)
+sklearn.set_config(enable_metadata_routing=True)
 
 def load_cat_encoding(cat_encoding_method: str, 
                       cols=None, 
@@ -89,11 +89,9 @@ def load_cat_encoding(cat_encoding_method: str,
 
 def load_cols_transformer(df:pd.DataFrame,
                           onehot_threshold=9,
-                          add_imputer=False,
                           n_jobs=1,
                           scaler = StandardScaler(),
                           onehot_encoder = OneHotEncoder(handle_unknown='ignore'),
-                          imputer_n_neighbors=9,
                           cat_encoding_method='binary',
                           **cat_encoding_kwargs):
 
@@ -122,13 +120,7 @@ def load_cols_transformer(df:pd.DataFrame,
         transformers, remainder="passthrough", n_jobs=n_jobs, verbose=False
     )
 
-    # get transform pipeline
-    steps = [('col_trans', col_transformer)]
-    if add_imputer:
-        imputer = KNNImputer(n_neighbors=imputer_n_neighbors)
-        steps.append(('imputer',imputer))
-
-    return Pipeline(steps=steps)
+    return col_transformer 
 
 
 def load_feature_selector(
@@ -169,8 +161,6 @@ def load_feature_selector(
                                )
     else:
         raise NotImplementedError
-
-    
 
     return Pipeline(steps=[('feature_selector',selector)])
 
@@ -334,7 +324,7 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
         self.verbose=verbose
         
     def fit_transform(self, X, y = None, **fit_params):
-        self.fit(X,y,**fit_params)
+        self.fit(X=X,y=y,**fit_params)
         return self.transform(X=X,y=y)
             
     
@@ -362,9 +352,9 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
 
     def transform(self,X,y=None):
         
-        validate_data(self,X=X,y=y,reset=False)
+        validate_data(self,X=X,reset=False)
         
-        return self._selector.transform(X=X,y=y)
+        return self._selector.transform(X=X)
 
 
 
@@ -411,15 +401,21 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
         self._col_transformer = load_cols_transformer(df=X,
                                                     onehot_threshold=9,
-                                                    add_imputer=False,
-                                                    n_jobs=1,
+                                                    n_jobs=self.n_jobs,
                                                     scaler = StandardScaler(),
                                                     onehot_encoder = OneHotEncoder(handle_unknown='ignore'),
-                                                    imputer_n_neighbors=9,
                                                     cat_encoding_method=self.cat_encoding_method,
                                                     **fit_params)
+        self._imputer = None
+        if self.add_imputer:
+            self._imputer = KNNImputer(n_neighbors=self.imputer_n_neighbors,
+                                       missing_values=np.nan,
+                                       add_indicator=False,
+                                       weights='distance'
+                                       )
         
-        self._col_transformer.fit(X=X)
+        
+        self._col_transformer.fit(X=X,y=y)
 
         self.is_fitted_ = True
 
@@ -431,10 +427,15 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         
         assert isinstance(X,pd.DataFrame), "Give a pandas DataFrame."
         
-        return self._col_transformer.transform(X=X)
+        X = self._col_transformer.transform(X=X)
+        
+        if self._imputer is not None:
+            X = self._imputer.fit_transform(X=X,y=y)
+        
+        return X
 
     def fit_transform(self, X, y = None, **fit_params):
-        self.fit(X,y,**fit_params)
+        self.fit(X=X,y=y,**fit_params)
         return self.transform(X=X,y=y)
 
 
@@ -501,6 +502,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         return self
 
     def transform(self, X:pd.DataFrame, y=None):
+        
+        assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
         
         df = X.copy()
         df = df.sort_values(by=["AccountId", "TX_DATETIME"])
