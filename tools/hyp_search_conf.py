@@ -280,7 +280,7 @@ C = [
     1291.5497,
     10000.0,
 ]
-n_estimators = np.linspace(3, 200, 10).round().astype(int).tolist()
+n_estimators = np.linspace(2, 15, 10).round().astype(int).tolist()
 max_depth = np.linspace(3, 30, 10).round().astype(int).tolist()
 
 models["logisticReg"] = dict(
@@ -497,7 +497,7 @@ models["xgboost"] = dict(
     model=XGBClassifier,
 )
 
-# #TODO: For the models below, try only after optimizing the previous model
+# TODO: For the models below, try only after optimizing the previous model
 # models['baggingClassifier'] = dict(estimator=[RandomForestClassifier(),
 #                                               HistGradientBoostingClassifier(),
 #                                               DecisionTreeClassifier(),

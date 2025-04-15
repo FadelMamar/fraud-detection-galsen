@@ -156,7 +156,7 @@
 #     X=X_train, y=y_train, sampler_names=sampler_names, sampler_cfgs=sampler_cfgs
 # )
 
-# %% Other
+# %% Dataset
 
 from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
 from fraudetect.dataset import load_data, MyDatamodule
@@ -176,39 +176,39 @@ COLUMNS_TO_DROP = [
 ]
 
 
-args = Arguments()
+# args = Arguments()
 
-args.windows_size_in_days = (1, 7, 30)
-args.cat_encoding_method = "hashing"
-args.add_imputer = True
-args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
-encoding_kwargs = dict(n_components=14)
-
-
-datamodule = MyDatamodule()
-
-feature_engineer = FraudFeatureEngineer(
-    windows_size_in_days=args.windows_size_in_days,
-    uid_cols=None,
-    session_gap_minutes=30,
-    n_clusters=8,
-)
-
-encoder = FeatureEncoding(
-    cat_encoding_method=args.cat_encoding_method,
-    add_imputer=args.add_imputer,
-    onehot_threshold=9,
-    cols_to_drop=COLUMNS_TO_DROP,
-    n_jobs=1,
-    cat_encoding_kwards=encoding_kwargs,
-)
-
-datamodule.setup(encoder=encoder, feature_engineer=feature_engineer)
+# args.windows_size_in_days = (1, 7, 30)
+# args.cat_encoding_method = "hashing"
+# args.add_imputer = True
+# args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
+# encoding_kwargs = dict(n_components=14)
 
 
-X_train, y = datamodule.get_train_dataset(args.data_path)
+# datamodule = MyDatamodule()
 
-X_pred, _ = datamodule.get_predict_dataset(r"D:\fraud-detection-galsen\data\test.csv")
+# feature_engineer = FraudFeatureEngineer(
+#     windows_size_in_days=args.windows_size_in_days,
+#     uid_cols=None,
+#     session_gap_minutes=30,
+#     n_clusters=8,
+# )
+
+# encoder = FeatureEncoding(
+#     cat_encoding_method=args.cat_encoding_method,
+#     add_imputer=args.add_imputer,
+#     onehot_threshold=9,
+#     cols_to_drop=COLUMNS_TO_DROP,
+#     n_jobs=1,
+#     cat_encoding_kwards=encoding_kwargs,
+# )
+
+# datamodule.setup(encoder=encoder, feature_engineer=feature_engineer)
+
+
+# X_train, y = datamodule.get_train_dataset(args.data_path)
+
+# X_pred, _ = datamodule.get_predict_dataset(r"D:\fraud-detection-galsen\data\test.csv")
 
 
 # train_raw_data = load_data("../data/training.csv")
@@ -230,3 +230,99 @@ X_pred, _ = datamodule.get_predict_dataset(r"D:\fraud-detection-galsen\data\test
 # # encoder.fit(df_train)
 # X_train,y_train = encoder.fit_transform(X=df_train)
 # X_pred,y_pred= encoder.transform(X=df_pred)
+
+
+#%% Preprocessing pipeline
+
+from fraudetect.dataset import load_data
+from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
+from fraudetect.preprocessing.preprocessing import (load_cols_transformer, 
+                                                    ColumnDropper, 
+                                                    Pipeline, 
+                                                    AdvancedFeatures)
+import sklearn
+import pandas as pd
+from sklearn.tree import DecisionTreeClassifier
+
+
+raw_data_train = load_data(r"D:\fraud-detection-galsen\data\training.csv")
+
+raw_data_pred = load_data(r"D:\fraud-detection-galsen\data\test.csv")
+
+
+# sklearn.set_config(enable_metadata_routing=True)
+
+COLUMNS_TO_DROP = [
+    "CurrencyCode",
+    "CountryCode",
+    "SubscriptionId",
+    "BatchId",
+    "CUSTOMER_ID",
+    "AccountId",
+    "TRANSACTION_ID",
+    "TX_DATETIME",
+]
+
+dropper = ColumnDropper(cols_to_drop=COLUMNS_TO_DROP)
+
+
+y_train = raw_data_train['TX_FRAUD']
+
+# v0
+# X,y = dropper.fit_transform(raw_data_train,)
+
+# encoder = load_cols_transformer(df=X)
+# X_train = encoder.fit_transform(X=X,y=None)
+
+
+# v2
+encoder_2 = FeatureEncoding(add_imputer=False)
+# X_ = encoder_2.fit_transform(X=raw_data_train)
+
+
+# v3
+# pipe = Pipeline(steps=[('col_dropper',dropper), ('col_encoder',encoder_2)])
+# X_ = pipe.fit_transform(X=raw_data_train)
+
+# v4
+feature_engineer = FraudFeatureEngineer(windows_size_in_days=[1,7,30],
+                                         uid_cols=[None,],
+                                         session_gap_minutes=60*3,
+                                         n_clusters=8
+                                        )
+
+# X_ = feature_engineer.fit_transform(X=raw_data_train)
+
+
+# v5
+pipe2 = Pipeline(steps=[('feature_engineer',feature_engineer),
+                       ('col_dropper',dropper),
+                       ('col_encoder',encoder_2)
+                ]
+            )
+
+
+X_all = pd.concat([raw_data_train,raw_data_pred],axis=0).reset_index(level=0,drop=True)
+
+X_train = pipe2.fit_transform(X=X_all)
+X_train = X_train[:len(raw_data_train),:]
+
+X_pred = pipe2.transform(X=raw_data_pred)
+
+
+# Feature selection
+estimator = DecisionTreeClassifier(max_depth=15,
+                                   max_features='sqrt',
+                                   random_state=41)
+
+feature_selector = AdvancedFeatures(verbose=True,
+                                    estimator=estimator,
+                                    feature_selector_name="selectkbest"
+                                    )
+
+feature_selector.fit_transform(X=X_train,y=y_train)
+
+
+
+
+
