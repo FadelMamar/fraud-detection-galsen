@@ -238,6 +238,7 @@ from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
 from fraudetect.preprocessing.preprocessing import (load_cols_transformer,
                                                     fit_outliers_detectors,
                                                     ColumnDropper, 
+                                                    load_workflow,
                                                     Pipeline, 
                                                     FeatureUnion,
                                                     OutlierDetector,
@@ -248,9 +249,13 @@ from fraudetect.modeling.utils import get_model, sample_model_cfg, instantiate_m
 from fraudetect.detectors import get_detector, instantiate_detector
 import sklearn
 import pandas as pd
+import numpy as np
 from sklearn.tree import DecisionTreeClassifier
 from shutil import rmtree
 from joblib import Memory
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import TimeSeriesSplit
+
 
 CONFIGS = import_from_path(
     "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
@@ -274,18 +279,22 @@ COLUMNS_TO_DROP = [
     "TX_DATETIME",
 ]
 
-dropper = ColumnDropper(cols_to_drop=COLUMNS_TO_DROP)
 
 
 y_train = raw_data_train['TX_FRAUD']
 
+# dropper = ColumnDropper(cols_to_drop=COLUMNS_TO_DROP)
+
+
+
+
 
 # v2
-encoder_2 = FeatureEncoding(add_imputer=False,
-                            cat_encoding_method='binary',
-                            imputer_n_neighbors=9,
-                            n_jobs=4
-                            )
+# encoder_2 = FeatureEncoding(add_imputer=False,
+#                             cat_encoding_method='binary',
+#                             imputer_n_neighbors=9,
+#                             n_jobs=4
+#                             )
 # X_ = encoder_2.fit_transform(X=raw_data_train)
 
 
@@ -294,33 +303,31 @@ encoder_2 = FeatureEncoding(add_imputer=False,
 # X_ = pipe.fit_transform(X=raw_data_train)
 
 # v4
-feature_engineer = FraudFeatureEngineer(windows_size_in_days=[1,7,30],
-                                         uid_cols=[None,],
-                                         session_gap_minutes=60*3,
-                                         n_clusters=8
-                                        )
+# feature_engineer = FraudFeatureEngineer(windows_size_in_days=[1,7,30],
+#                                          uid_cols=[None,],
+#                                          session_gap_minutes=60*3,
+#                                          n_clusters=8
+#                                         )
 # X_ = feature_engineer.fit_transform(X=raw_data_train)
 
 
 # v5
-pipe2 = Pipeline(steps=[('feature_engineer',feature_engineer),
-                       ('col_dropper',dropper),
-                       ('col_encoder',encoder_2)
-                ]
-            )
+# pipe2 = Pipeline(steps=[('feature_engineer',feature_engineer),
+#                        ('col_dropper',dropper),
+#                        ('col_encoder',encoder_2)
+#                 ]
+#             )
 
 
-X_all = pd.concat([raw_data_train,raw_data_pred],axis=0).reset_index(level=0,drop=True)
+# X_all = pd.concat([raw_data_train,raw_data_pred],axis=0).reset_index(level=0,drop=True)
 
-X_all = pipe2.fit_transform(X=X_all,y=None)
-X_train = X_all[:len(raw_data_train),:]
+# X_all = pipe2.fit_transform(X=X_all,y=None)
+# X_train = X_all[:len(raw_data_train),:]
 
 # X_pred = pipe2.transform(X=raw_data_pred)
 
 
-
 model_list = list()
-# names = CONFIGS.outliers_detectors.keys()
 names = ["cblof", "iforest"]
 names = sorted(names)
 outliers_det_configs = dict()
@@ -335,9 +342,7 @@ for name in names:
     outliers_det_configs[name] = cfg
 
 
-# fit_outliers_detectors(detector_list=zip(names,model_list), X_train=X_train)
-
-pyod_det = OutlierDetector(detector_list=model_list)
+# pyod_det = OutlierDetector(detector_list=model_list)
 # det_scores = pyod_det.fit_transform(X=X_train, y=None)
 
 
@@ -346,41 +351,41 @@ estimator = DecisionTreeClassifier(max_depth=15,
                                    max_features='sqrt',
                                    random_state=41)
 
-feature_selector = AdvancedFeatures(verbose=True,
-                                    estimator=estimator,
-                                    do_pca=True,
-                                    top_k_best=10,
-                                    pca_n_components=20,
-                                    feature_selector_name="selectkbest"
-                                    )
+# feature_selector = AdvancedFeatures(verbose=True,
+#                                     estimator=estimator,
+#                                     do_pca=True,
+#                                     top_k_best=10,
+#                                     pca_n_components=20,
+#                                     feature_selector_name="selectkbest"
+#                                     )
 # X_selected = feature_selector.fit_transform(X=X_train,y=y_train)
 
-concatenator = FeatureUnion(transformer_list=[('pyod_det',pyod_det), ('feature_selector',feature_selector)],
-                            n_jobs=2
-                            )
-X_pyod = concatenator.fit_transform(X=X_train,y=y_train)
+# concatenator = FeatureUnion(transformer_list=[('pyod_det',pyod_det), ('feature_selector',feature_selector)],
+#                             n_jobs=2
+#                             )
+# X_pyod = concatenator.fit_transform(X=X_train,y=y_train)
 
 # load model
-model, model_cfg = get_model('logisticReg', CONFIGS.models)
-model_cfg = sample_model_cfg(model_cfg)
+model, model_cfgs = get_model('logisticReg', CONFIGS.models)
+model_cfg = sample_model_cfg(model_cfgs)
 model = instantiate_model(model, **model_cfg)
 
 # Create a temporary folder to store the transformers of the pipeline
-location = "cachedir"
-memory = Memory(location=location, verbose=1)
+# location = "cachedir"
+# memory = Memory(location=location, verbose=1)
 
 # Final Pipeline
-workflow = Pipeline(steps=[('feature_engineer',feature_engineer),
-                       ('col_dropper',dropper),
-                       ('col_encoder',encoder_2),
-                       # ('feature_selector',feature_selector),
-                       ('concat',concatenator),
-                       # ('model', model),
-                       ],
-                    # memory=memory
-            )
+# workflow = Pipeline(steps=[('feature_engineer',feature_engineer),
+#                        ('col_dropper',dropper),
+#                        ('col_encoder',encoder_2),
+#                        # ('feature_selector',feature_selector),
+#                        ('concat',concatenator),
+#                        # ('model', model),
+#                        ],
+#                     # memory=memory
+#             )
 
-X_processed = workflow.fit_transform(X=raw_data_train, y=y_train)
+# X_processed = workflow.fit_transform(X=raw_data_train, y=y_train)
 
 # score = workflow.fit(X=raw_data_train, y=y_train).score(X=raw_data_train,y=y_train)
 
@@ -388,4 +393,50 @@ X_processed = workflow.fit_transform(X=raw_data_train, y=y_train)
 # memory.clear(warn=False)
 # rmtree(location)
  
+
+data_processor = load_workflow(cols_to_drop=COLUMNS_TO_DROP,
+                  rfe_estimator=estimator,
+                  pca_n_components=20,
+                  detector_list=model_list,
+                  session_gap_minutes=60*3,
+                  uid_cols=[None,],
+                  add_imputer=False,
+                  feature_selector_name="selectkbest",
+                  windows_size_in_days=[1,7,30],
+                  cat_encoding_method='binary',
+                  imputer_n_neighbors=9,
+                  n_clusters=8,
+                  top_k_best=10,
+                  do_pca=True,
+                  verbose=True,
+                  n_jobs=-4
+                  )
+
+y_train = raw_data_train['TX_FRAUD']
+# X_train = data_processor.fit_transform(X=raw_data_train, y=y_train) #.score(X=raw_data_train,y=y_train)
+
+# X_pred = data_processor.transform(raw_data_pred)
+
+classifier = Pipeline(steps=[('data_processor',data_processor),
+                       ('model',model)]
+                      )
+
+params_config = {f"model__{k}":v for k,v in model_cfgs.items()}
+
+search_engine = RandomizedSearchCV(
+    classifier,
+    param_distributions=params_config,
+    scoring='f1',
+    cv=TimeSeriesSplit(n_splits=5,gap=5000),
+    refit=True,
+    n_jobs=-4,
+    n_iter=100,
+    random_state=41,
+    verbose=True,
+)
+
+search_engine.fit(X=raw_data_train, y=y_train)
+
+
+
 

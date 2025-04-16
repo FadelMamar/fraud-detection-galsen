@@ -154,6 +154,8 @@ venv.bak/
 
 runs*
 
+cachedir
+
 # mypy
 .mypy_cache/
 .dmypy.json

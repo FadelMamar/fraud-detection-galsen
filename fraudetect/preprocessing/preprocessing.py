@@ -35,7 +35,7 @@ import numpy as np
 from sklearn.tree import DecisionTreeClassifier
 from ..detectors import get_detector, instantiate_detector
 
-sklearn.set_config(enable_metadata_routing=True)
+# sklearn.set_config(enable_metadata_routing=True)
 
 def load_cat_encoding(cat_encoding_method: str, 
                       cols=None, 
@@ -288,7 +288,6 @@ class ColumnDropper(TransformerMixin, BaseEstimator):
             df.drop(columns=self.cols_to_drop, inplace=True)
 
         if "TX_FRAUD" in df.columns:
-            # y = df["TX_FRAUD"].copy()
             df = df.drop(columns=["TX_FRAUD"])
 
         return df
@@ -297,19 +296,21 @@ class ColumnDropper(TransformerMixin, BaseEstimator):
 class OutlierDetector(TransformerMixin, BaseEstimator):
 
     _parameter_constraints = {
-        # "detector_list": [
-        #     "array-like",
-        #     Interval(Integral, 1, None, closed="left"),
-        # ],
+        "detector_list": [
+            "array-like",
+            Interval(Integral, 1, None, closed="left"),
+        ],
         "n_jobs":[int],
     }
 
     def __init__(self, 
                  detector_list: list[BaseDetector]=(None,),
                  n_jobs:int=1):
-        
+                
         self.detector_list = detector_list
         self.n_jobs = n_jobs
+        
+        assert all([det is not None for det in self.detector_list]), "Provide detector_list"
 
     def fit_transform(self, X, y = None, **fit_params):
         self.fit(X,y,**fit_params)
@@ -403,10 +404,14 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
     
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self,X,y=None,**fit_params):
+        
+        assert any([self.do_pca, self.feature_selector_name != 'None']), "Provide do_pca=True or feature_selector_name != 'None'"
                 
         validate_data(self,X=X,y=y)
             
         self._pca_transform = None
+        self._selector = None
+        
         if self.do_pca:
             n_components = min(self.pca_n_components,X.shape[1])
             if n_components == X.shape[1]:
@@ -414,21 +419,21 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
                 
             self._pca_transform = make_pipeline(StandardScaler(), PCA(n_components=n_components))
             X = self._pca_transform.fit_transform(X=X,y=y)
-                   
-        cv = TimeSeriesSplit(n_splits=self.n_splits,gap=self.cv_gap)
-        self._selector = load_feature_selector(n_features_to_select=self.n_features_to_select,
-                                               cv=cv,
-                                               estimator=self.estimator,
-                                               name = self.feature_selector_name,
-                                               top_k_best=self.top_k_best,
-                                               rfe_step=self.rfe_step,
-                                               scoring = self.scoring,
-                                               n_jobs = self.n_jobs,
-                                               verbose = self.verbose,
-                                               )
-        self._selector.fit(X=X,y=y)
         
-                
+        if self.feature_selector_name != 'None':
+            cv = TimeSeriesSplit(n_splits=self.n_splits,gap=self.cv_gap)
+            self._selector = load_feature_selector(n_features_to_select=self.n_features_to_select,
+                                                   cv=cv,
+                                                   estimator=self.estimator,
+                                                   name = self.feature_selector_name,
+                                                   top_k_best=self.top_k_best,
+                                                   rfe_step=self.rfe_step,
+                                                   scoring = self.scoring,
+                                                   n_jobs = self.n_jobs,
+                                                   verbose = self.verbose,
+                                                   )
+            self._selector.fit(X=X,y=y)
+                        
         self.is_fitted_ = True
         
         return self
@@ -440,17 +445,15 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
         if self._pca_transform is not None:
             X = self._pca_transform.transform(X=X)
         
-        return self._selector.transform(X=X)
-
+        if self._selector is not None:
+            X = self._selector.transform(X=X)
+            
+        return X 
 
 
 class FeatureEncoding(TransformerMixin, BaseEstimator):
 
     _parameter_constraints = {
-        # "cols_to_drop": [
-        #     "array-like",
-        #     Interval(Integral, 1, None, closed="left"),
-        # ],
         "add_imputer":[bool],
         "imputer_n_neighbors":[int],
         "onehot_threshold":[int],
@@ -464,18 +467,14 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         add_imputer: bool = False,
         imputer_n_neighbors:int=5,
         onehot_threshold: int = 9,
-        # cols_to_drop: list = None,
         n_jobs: int = 1,
     ):
-        # self.cols_to_drop = cols_to_drop
 
         self.add_imputer = add_imputer
         self.imputer_n_neighbors = imputer_n_neighbors
-        # self.imputer = imputer
 
         self.cat_encoding_method = cat_encoding_method
 
-        # self.onehot_encoder = onehot_encoder
         self.onehot_threshold = onehot_threshold
 
         self.n_jobs = n_jobs
@@ -485,8 +484,10 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
         assert isinstance(X, pd.DataFrame), "provide a DataFrame"
 
+        # validate_data(self,X=X,y=y)
+
         self._col_transformer = load_cols_transformer(df=X,
-                                                    onehot_threshold=9,
+                                                    onehot_threshold=self.onehot_threshold,
                                                     n_jobs=self.n_jobs,
                                                     scaler = StandardScaler(),
                                                     onehot_encoder = OneHotEncoder(handle_unknown='ignore'),
@@ -499,10 +500,11 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
                                        add_indicator=False,
                                        weights='distance'
                                        )
-        
-        
+            
         self._col_transformer.fit(X=X,y=y)
 
+        self.feature_names_in_ = [col for col in X.columns]
+        self.n_features_in_ = len(self.feature_names_in_)
         self.is_fitted_ = True
 
         self._columns_of_transformed_data = self._col_transformer.get_feature_names_out()
@@ -512,7 +514,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
     def transform(self, X:pd.DataFrame, y=None):
         
         assert isinstance(X,pd.DataFrame), "Give a pandas DataFrame."
-        
+
         X = self._col_transformer.transform(X=X)
         
         if self._imputer is not None:
@@ -567,19 +569,29 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self.n_clusters = n_clusters
         self.cluster_on_feature = cluster_on_feature
     
+    def check_dataframe(self,X:pd.DataFrame):
+        
+        assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
+        assert X.isna().sum().sum() < 1, "Found NaN values"
+    
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X:pd.DataFrame, y=None, **fit_params):
+        
+        self.check_dataframe(X=X)
+        
+        # reset index > causes issues when doing cross-val
+        df = X.copy().reset_index(drop=True)
         
         self._customer_cluster_labels = None
         
         self._product_fraud_rate = (
-            X.groupby("ProductId")["TX_FRAUD"].mean().rename("ProductFraudRate")
+            df.groupby("ProductId")["TX_FRAUD"].mean().rename("ProductFraudRate")
         )
         self._provider_fraud_rate = (
-            X.groupby("ProviderId")["TX_FRAUD"].mean().rename("ProviderFraudRate")
+            df.groupby("ProviderId")["TX_FRAUD"].mean().rename("ProviderFraudRate")
         )
         self._channel_fraud_rate = (
-            X.groupby("ChannelId")["TX_FRAUD"].mean().rename("ChannelIdFraudRate")
+            df.groupby("ChannelId")["TX_FRAUD"].mean().rename("ChannelIdFraudRate")
         )
 
         # if self.n_clusters is not None:
@@ -589,9 +601,11 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
     def transform(self, X:pd.DataFrame, y=None):
         
-        assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
+        self.check_dataframe(X=X)
         
-        df = X.copy()
+        # reset index > causes issues when doing cross-val
+        df = X.copy().reset_index(drop=True)
+        
         df = df.sort_values(by=["AccountId", "TX_DATETIME"])
 
         if all([col is not None for col in self.uid_cols]):
@@ -676,8 +690,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                 .groupby(col)["TRANSACTION_ID"]
                 .rolling("1h")
                 .count()
-                .reset_index(level=0, drop=True)
-                .reset_index(level=0, drop=True)
+                .reset_index(drop=True)
             )
 
             for day in self.windows_size_in_days:
@@ -687,13 +700,12 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                     .groupby(col)["TX_AMOUNT"]
                     .rolling(window=f"{day}d", min_periods=1)
                     .mean()
-                    .reset_index(level=0, drop=True)
-                    .reset_index(level=0, drop=True)
+                    .reset_index(drop=True)
                 )
 
         return df
 
-    def _add_account_stats(self, df):
+    def _add_account_stats(self, df:pd.DataFrame):
         account_stats = (
             df.groupby("AccountId")["TX_AMOUNT"]
             .agg(["mean", "std"])
@@ -702,13 +714,17 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         account_stats["AccountStdAmt"] = (
             account_stats["AccountStdAmt"].fillna(1).replace(0, 1)
         )
-        account_stats["AccountMeanAmt"].fillna(0, inplace=True)
+        account_stats.fillna({"AccountMeanAmt":0},inplace=True)
 
         df = df.merge(account_stats, on="AccountId", how="left")
         df["AccountAmountZScore"] = (df["TX_AMOUNT"] - df["AccountMeanAmt"]) / df[
             "AccountStdAmt"
         ]
-        df["AccountAmountOverAvg"] = df["TX_AMOUNT"]
+        df["AccountAmountOverAvg"] = df["TX_AMOUNT"] / df["AccountMeanAmt"]
+
+        # df.fillna({"AccountAmountOverAvg":0, 
+        #            "AccountAmountZScore":0},inplace=True)
+
         return df
 
     def _add_customer_stats(self, df):
@@ -720,7 +736,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         customer_stats["CustomerStdAmt"] = (
             customer_stats["CustomerStdAmt"].fillna(1).replace(0, 1)
         )
-        customer_stats["CustomerMeanAmt"].fillna(0, inplace=True)
+        customer_stats.fillna({"CustomerMeanAmt": 0}, inplace=True)
 
         df = df.merge(customer_stats, on="CUSTOMER_ID", how="left")
         df["CustomerAmountZScore"] = (df["TX_AMOUNT"] - df["CustomerMeanAmt"]) / df[
@@ -895,17 +911,25 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
 
 
-def load_workflow(raw_data_train,
-                  cols_to_drop,
-                  estimator,
+def load_workflow(cols_to_drop,
                   pca_n_components,
-                  detector_list,
+                  detector_list=None,
+                  n_splits=5,
+                  cv_gap=5000,
+                  scoring='f1',
+                  onehot_threshold=9,
                   session_gap_minutes=60*3,
                   uid_cols=[None,],
-                  feature_selector_name="selectkbest",
+                  behavioral_drift_cols=["AccountId",],
+                  rfe_estimator=DecisionTreeClassifier(),
+                  feature_selector_name:str|None="selectkbest",
+                  seq_n_features_to_select=3,
                   windows_size_in_days=[1,7,30],
                   cat_encoding_method='binary',
+                  cluster_on_feature="CUSTOMER_ID",
                   imputer_n_neighbors=9,
+                  add_imputer=False,
+                  rfe_step=3,
                   n_clusters=8,
                   top_k_best=10,
                   do_pca=True,
@@ -916,44 +940,56 @@ def load_workflow(raw_data_train,
     dropper = ColumnDropper(cols_to_drop=cols_to_drop)
 
 
-    encoder_2 = FeatureEncoding(add_imputer=False,
+    encoder = FeatureEncoding(add_imputer=add_imputer,
                                 cat_encoding_method=cat_encoding_method,
                                 imputer_n_neighbors=imputer_n_neighbors,
-                                n_jobs=n_jobs
+                                n_jobs=n_jobs,
+                                onehot_threshold=onehot_threshold,
                                 )
     
    
     feature_engineer = FraudFeatureEngineer(windows_size_in_days=windows_size_in_days,
                                              uid_cols=uid_cols,
                                              session_gap_minutes=session_gap_minutes,
-                                             n_clusters=n_clusters
+                                             n_clusters=n_clusters,
+                                             behavioral_drift_cols=behavioral_drift_cols,
+                                             cluster_on_feature=cluster_on_feature,
+                                             uid_col_name="CustomerUID", # name given to uid cols created from interactions of uid_cols
                                             )
     
+    # get advanced features -> PCA, feature selection + outliers scores
+    advanced_features = []
+    if (feature_selector_name is not None) or do_pca:
+        enhancer = AdvancedFeatures(verbose=bool(verbose),
+                                            estimator=rfe_estimator,
+                                            do_pca=do_pca,
+                                            top_k_best=top_k_best,
+                                            rfe_step=rfe_step,
+                                            n_jobs=n_jobs,
+                                            n_splits=n_splits,
+                                            n_features_to_select=seq_n_features_to_select,
+                                            cv_gap=cv_gap,
+                                            scoring=scoring,
+                                            pca_n_components=pca_n_components,
+                                            feature_selector_name=str(feature_selector_name)
+                                            )
+        advanced_features.append(('feature_mixer', enhancer))
     
-    pyod_det = OutlierDetector(detector_list=detector_list)
-
-
-    feature_selector = AdvancedFeatures(verbose=verbose,
-                                        estimator=estimator,
-                                        do_pca=do_pca,
-                                        top_k_best=top_k_best,
-                                        pca_n_components=pca_n_components,
-                                        feature_selector_name=feature_selector_name
-                                        )
-    
-
-    concatenator = FeatureUnion(transformer_list=[('pyod_det', pyod_det), 
-                                                  ('feature_selector',feature_selector)],
-                                n_jobs=n_jobs
-                                )
+    if detector_list is not None:
+        pyod_det = OutlierDetector(detector_list=detector_list)
+        advanced_features.append(('outlier_scores', pyod_det))
+        
+    if (detector_list is not None) or (feature_selector_name is not None):
+        advanced_features = FeatureUnion(transformer_list=advanced_features,
+                                    n_jobs=n_jobs
+                                    )
     
     # Final Pipeline
-    workflow = Pipeline(steps=[('feature_engineer',feature_engineer),
-                           ('col_dropper',dropper),
-                           ('col_encoder',encoder_2),
-                           ('concat', concatenator),
-                           ]
-                )
+    steps = [feature_engineer,dropper,encoder]
+    if isinstance(advanced_features, TransformerMixin):
+        steps.append(advanced_features)
+    
+    workflow = make_pipeline(*steps)
     
     return workflow
     

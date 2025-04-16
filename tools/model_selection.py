@@ -180,9 +180,9 @@ if __name__ == "__main__":
 
     args.model_names = (
         # "mlp",
-        "decisionTree",
+        # "decisionTree",
         "logisticReg",
-        "svc",
+        # "svc",
         # "sgdClassifier",
         # "randomForest",
         # "balancedRandomForest",
@@ -193,17 +193,17 @@ if __name__ == "__main__":
 
     current_time = datetime.now().strftime("%H-%M")
 
-    args.study_name = "tree-models"
+    args.study_name = "debug"
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
-    args.optuna_n_trials = 50
+    args.optuna_n_trials = 2
 
     args.cv_n_iter = 500
     args.scoring = "f1"  # 'f1', precision
-    args.cv_method = "optuna"
+    args.cv_method = "random" # optuna random
     args.cv_gap = 1051 * 5
     args.n_splits = 3 #
-    args.n_jobs = 6
+    args.n_jobs = 1
     args.delta_train = 50
     args.delta_delay = 7
     args.delta_test = 20
@@ -219,7 +219,7 @@ if __name__ == "__main__":
     args.do_poly_expansion = False
     args.do_feature_selection = True
 
-    args.disable_pyod_outliers = False
+    args.disable_pyod_outliers = True
     args.pyod_detectors = [
         "abod",
         "cblof",
@@ -242,7 +242,7 @@ if __name__ == "__main__":
         cat_encoding_method="hashing", n_components=14
     )
 
-    args.add_imputer = True  # handle missing values at prediction time
+    args.add_imputer = False  # handle missing values at prediction time
 
     args.cat_encoding_method = "binary"  # to handle unknown values effectively, 'catboost', 'binary', 'hashing'
     args.cat_encoding_hash_n_components = 7  # if cat_encoding_method='hashing'
@@ -288,11 +288,11 @@ if __name__ == "__main__":
     study.optimize(
         objective_optuna,
         n_trials=args.optuna_n_trials,
-        n_jobs=4,
+        n_jobs=1,
         show_progress_bar=True,
         timeout=60 * 60 * 3,
     )
-    print(study.best_trial)
+    # print(study.best_trial)
 
     # Save study.best_trial
     filename = os.path.join(args.work_dir, args.study_name + ".joblib")

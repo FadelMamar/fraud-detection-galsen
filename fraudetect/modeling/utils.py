@@ -11,20 +11,18 @@ import json, os, joblib, traceback
 import numpy as np
 import pandas as pd
 from sklearn.metrics import get_scorer, f1_score
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import TimeSeriesSplit
-from collections import OrderedDict
+from sklearn.tree import DecisionTreeClassifier
 import random
 from collections.abc import Iterable
 import optuna
 from optuna.samplers import TPESampler
 from fraudetect import import_from_path
 from ..config import Arguments
-from ..dataset import MyDatamodule
-from ..preprocessing import FeatureEncoding, FraudFeatureEngineer
-from ..preprocessing import load_feature_selector
+from ..dataset import load_data
+from ..preprocessing import load_workflow
+from ..detectors import get_detector, instantiate_detector
 
 
 def evaluate(classifier, X, y):
@@ -189,7 +187,8 @@ def results_from_search(search_engine, performance_metrics_list=["score"]):
 def _tune_models_hyp(
     X_train: np.ndarray,
     y_train: np.ndarray,
-    models_config: dict,
+    classifier,
+    params_config,
     n_splits: int = 5,
     gap: int = 1051 * 5,
     n_iter: int = 100,
@@ -197,24 +196,24 @@ def _tune_models_hyp(
     verbose: int = 0,
     n_jobs: int = 8,
     method: str = "random",
-) -> dict[str, BaseSearchCV]:
+) -> BaseSearchCV:
     # 5 days, 1051 = average number of transactions per day
 
     assert isinstance(scoring, str), "It should be a string."
 
     cv = TimeSeriesSplit(n_splits=n_splits, gap=gap)
 
-    model_name = list(models_config.keys())[0]
-    print(f"\nHyperparameter tuning for model: {model_name}")
+    # model_name = list(models_config.keys())[0]
+    # print(f"\nHyperparameter tuning for model: {model_name}")
 
-    model, params_config = get_model(model_name, models_config)
+    # model, params_config = get_model(model_name, models_config)
 
     search_engine = hyperparameter_tuning(
         cv=cv,
         params_config=params_config,
         X_train=X_train,
         y_train=y_train,
-        model=model(),
+        model=classifier,
         scoring=scoring,
         method=method,  # other, gridsearch
         verbose=verbose,
@@ -225,29 +224,31 @@ def _tune_models_hyp(
     if verbose:
         score = search_engine.best_score_
         print(f"mean {scoring} score for best_estimator: {score:.4f}")
-        print("best params: ", search_engine.best_params_)
+        # print("best params: ", search_engine.best_params_)
 
-    return {model_name: search_engine}  #
+    return search_engine # {model_name: search_engine}  #
 
 
 def _run(
     args: Arguments,
-    models_config: dict,
+    classifier,
+    params_config,
     X_train,
     y_train,
     save_path: str = None,
     verbose=0,
-) -> dict[str, BaseSearchCV]:
-    if np.any(np.isnan(X_train)):
-        raise ValueError("There are NaN values in X_train.")
+) -> BaseSearchCV:
+    # if np.any(np.isnan(X_train)):
+    #     raise ValueError("There are NaN values in X_train.")
 
-    assert len(models_config) == 1, "Provide only one model in models_config"
+    # assert len(models_config) == 1, "Provide only one model in models_config"
 
     # tune models
     best_results = _tune_models_hyp(
-        X_train,
-        y_train,
-        models_config=models_config,
+        X_train=X_train,
+        y_train=y_train,
+        classifier=classifier,
+        params_config=params_config,
         n_splits=args.n_splits,
         gap=args.cv_gap,
         n_iter=args.cv_n_iter,
@@ -284,31 +285,18 @@ class Tuner(object):
         self.verbose = verbose
         self.count_iter = 0
         self.feature_selector_kwargs= feature_selector_kwargs
+        self.cat_encoding_kwards=cat_encoding_kwards
         self.selector = None
-
-        self.datamodule = MyDatamodule()
-        feature_engineer = FraudFeatureEngineer(
-            windows_size_in_days=args.windows_size_in_days,
-            uid_cols=args.concat_features,
-            session_gap_minutes=args.session_gap_minutes,
-            n_clusters=None,
-        )
-
-        encoder = FeatureEncoding(
-            cat_encoding_method=args.cat_encoding_method,
-            add_imputer=args.add_imputer,
-            onehot_threshold=args.onehot_threshold,
-            cols_to_drop=args.cols_to_drop,
-            n_jobs=args.n_jobs,
-            cat_encoding_kwards=cat_encoding_kwards,
-        )
-
-        self.datamodule.setup(encoder=encoder, feature_engineer=feature_engineer)
-
-        self.X_train, self.y_train = self.datamodule.get_train_dataset(args.data_path)
-
+                
+        self.raw_data_train = load_data(args.data_path)
+        
+        # self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
+        self.y_train = self.raw_data_train['TX_FRAUD']
+        
+        self.classifier = None
+       
         self.best_score = 0.0
-        self.transform_pipeline = None
+        self.best_records = dict()
         self.ckpt_filename = os.path.join(
             args.work_dir, args.study_name + "_best-run.joblib"
         )
@@ -323,11 +311,12 @@ class Tuner(object):
 
         return _cfg
 
-    def save_checkpoint(self, score: float, results: dict):
+    def save_checkpoint(self,model_name:str, score: float, results: BaseSearchCV):
         if score >= self.best_score:
             self.best_score = score
-            vals = [results, self.transform_pipeline, self.datamodule, self.selector]
+            vals = [results, self.classifier]
             joblib.dump(vals, self.ckpt_filename)
+            self.best_records[model_name]=results
 
     def load_hyp_conf(self, path_conf: str):
         try:
@@ -338,11 +327,12 @@ class Tuner(object):
     def __call__(self, trial):
         self.count_iter += 1
 
-        X = self.X_train.copy()
+        X = self.raw_data_train.copy()
         y = self.y_train.copy()
 
         self.transform_pipeline = None
         self.selector = None
+    
         pipe = []
 
         # select model
@@ -351,77 +341,106 @@ class Tuner(object):
             self.model_names,
         )
         models_config = {model_name: self.HYP_CONFIGS.models[model_name]}
-
+        model, models_config = get_model(model_name, self.HYP_CONFIGS.models)
+        model = instantiate_model(model,**sample_model_cfg(models_config)) # instantiate with        
+                
         # PCA
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
         if do_pca:
             n_components = trial.suggest_int(
-                "n_components", min(5, self.X_train.shape[1]), self.X_train.shape[1], 3
+                "n_components", 5, 100, 3
             )
-            pca_transform = PCA(n_components=n_components)
-            std_scaler = StandardScaler()
-            pipe = pipe + [("scaler", std_scaler), ("pca", pca_transform)]
-
-        if len(pipe) > 0:
-            self.transform_pipeline = Pipeline(steps=pipe)
-            X = self.transform_pipeline.fit_transform(X=X)
-
+                   
         # select outlier detector for data aug
         disable_pyod = trial.suggest_categorical(
             "disable_pyod", [True, self.disable_pyod]
         )
         if disable_pyod:
-            outliers_det_configs = None
+            # outliers_det_configs = None
+            detector_list = None
         else:
-            _cfgs = list()
+            # cfgs = list()
             pyod_choices = trial.suggest_categorical(
                 "pyod_choices",
                 self.pyod_choices,  # range(1,self.pyod_detectors+1)
             )
             pyod_choices = json.loads(pyod_choices)
+            detector_list = []
             for name in self.pyod_detectors:
-                _cfg = self.sample_cfg_optuna(
+                cfg = self.sample_cfg_optuna(
                     trial, name, self.HYP_CONFIGS.outliers_detectors[name]
                 )
-                if name in pyod_choices:
-                    _cfgs.append(_cfg)
-            outliers_det_configs = OrderedDict(zip(pyod_choices, _cfgs))
-
+                detector, _cfg = get_detector(name=name, config={name:cfg})
+                detector = instantiate_detector(detector, _cfg)
+                detector_list.append(detector)
+                
+            #     if name in pyod_choices:
+            #         cfgs.append(_cfg)
+            # outliers_det_configs = OrderedDict(zip(pyod_choices, cfgs))
+            
         # select samplers
-        sampler_cfgs, sampler_names = None, None
-        if not trial.suggest_categorical(
-            "disable_samplers", [True, self.disable_samplers]
-        ):
-            conbimed_sampler = trial.suggest_categorical(
-                "conbined_sampler", self.HYP_CONFIGS.combinedsamplers
-            )
-            sampler_names = [
-                conbimed_sampler,
-            ]
+        # sampler_cfgs, sampler_names = None, None
+        # if not trial.suggest_categorical(
+        #     "disable_samplers", [True, self.disable_samplers]
+        # ):
+        #     conbimed_sampler = trial.suggest_categorical(
+        #         "conbined_sampler", self.HYP_CONFIGS.combinedsamplers
+        #     )
+        #     sampler_names = [
+        #         conbimed_sampler,
+        #     ]
 
         # augment or resample data on the fly if 
-        (X, y), fitted_models_pyod = self.datamodule.augment_resample_dataset(
-            X=X,
-            y=y,
-            outliers_det_configs=outliers_det_configs,
-            sampler_names=sampler_names,
-            sampler_cfgs=sampler_cfgs,
-            fitted_detector_list=None,
-        )
+        # (X, y), fitted_models_pyod = self.datamodule.augment_resample_dataset(
+        #     X=X,
+        #     y=y,
+        #     outliers_det_configs=outliers_det_configs,
+        #     sampler_names=sampler_names,
+        #     sampler_cfgs=sampler_cfgs,
+        #     fitted_detector_list=None,
+        # )
 
         # feature selector:
-        # if trial.suggest_categorical(
-        #     "select_features", [True, self.args.do_feature_selection]
-        # ):
-        #     X, self.selector = feature_selector(X_train=X,y_train=y,
-        #                     	cv=TimeSeriesSplit(n_splits=self.args.n_splits,gap=self.args.cv_gap),
-        #                         **self.feature_selector_kwargs              
-        #                 )
+        do_feature_selection =  trial.suggest_categorical(
+            "select_features", [True, self.args.do_feature_selection])
+        if do_feature_selection:
+            feature_selector_name = trial.suggest_categorical(
+                "feature_selector_name", [])
+        
+        rfe_estimator = DecisionTreeClassifier(max_depth=15,
+                                           max_features='sqrt',
+                                           random_state=41)
+        
+        data_processor = load_workflow(
+                          cols_to_drop=self.args.cols_to_drop,
+                          rfe_estimator=rfe_estimator,
+                          pca_n_components=20,
+                          detector_list=detector_list,
+                          cv_gap=self.args.cv_gap,
+                          n_splits=self.args.n_splits,
+                          session_gap_minutes=self.args.session_gap_minutes,
+                          uid_cols=[None,],
+                          feature_selector_name="selectkbest",
+                          windows_size_in_days=self.args.windows_size_in_days,
+                          cat_encoding_method=self.args.cat_encoding_method,
+                          imputer_n_neighbors=9,
+                          n_clusters=8,
+                          top_k_best=10,
+                          do_pca=do_pca,
+                          verbose=self.verbose,
+                          n_jobs=self.args.n_jobs
+                          )
+        
+        classifier = Pipeline(steps=[('data_processor',data_processor),
+                               ('model',model)]
+                            )
+        params_config = {f"model__{k}":v for k,v in models_config.items()}
 
         # try:
         results = _run(
             args=self.args,
-            models_config=models_config,
+            classifier=classifier,
+            params_config=params_config,
             X_train=X,
             y_train=y,
             save_path=None,
@@ -430,10 +449,10 @@ class Tuner(object):
 
         # try to get score
         try:
-            score = results[model_name].best_score_
-            results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
-            results["samplers"] = (sampler_names, sampler_cfgs)
-            self.save_checkpoint(score=score, results=results)
+            score = results.best_score_
+            # results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
+            # results["samplers"] = (sampler_names, sampler_cfgs)
+            self.save_checkpoint(model_name=model_name,score=score, results=results)
 
         except ValueError:
             traceback.print_exc()
