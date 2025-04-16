@@ -624,7 +624,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         # reset index > causes issues when doing cross-val
         df = X.copy().reset_index(drop=True)
         
-        df = df.sort_values(by=["AccountId", "TX_DATETIME"])
+        df = df.sort_values(by=["TX_DATETIME"])
 
         if all([col is not None for col in self.uid_cols]):
             df = self._create_unique_identifier(df)
@@ -698,6 +698,9 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df["IsNight"] = df["Hour"].between(0, 6).astype(int)
 
         for col in ["AccountId", "CUSTOMER_ID"]:
+
+            df.sort_values(by=[col, "TX_DATETIME"],inplace=True)
+
             df[col + "_TimeSinceLastTxn"] = (
                 df.groupby(col)["TX_DATETIME"].diff().dt.total_seconds().fillna(0) / 60
             )
@@ -817,8 +820,9 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         return df
 
     def _compute_behavioral_drift(self, df):
-        df.set_index("TX_DATETIME", inplace=True)
-
+        
+        df = df.sort_values(by=["TX_DATETIME"]).set_index("TX_DATETIME")
+        
         for col in self.behavioral_drift_cols:
             val_7d = df.groupby(col)["TX_AMOUNT"].transform(
                 lambda x: x.rolling("7d").mean()
@@ -836,9 +840,13 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             ].transform(lambda x: x.rolling("30d").std()).replace(0, 1).fillna(1)
 
         df.reset_index(inplace=True)
+
         return df
 
     def _compute_avg_txn_features(self, df):
+
+        df = df.sort_values(by=["TX_DATETIME"])
+
         for col in self.behavioral_drift_cols:
             df[f"{col}_MovingAvg5"] = (
                 df.groupby(col)["TX_AMOUNT"]
@@ -855,6 +863,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             df["PctChangeFromAvg"] = (
                 df[f"{col}_MovingAvg5"] - df[f"{col}_LongTermAvg"]
             ) / df[f"{col}_LongTermAvg"]
+        
         return df
 
     def _compute_batch_gap_features(self, df):

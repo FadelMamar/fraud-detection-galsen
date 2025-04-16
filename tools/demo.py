@@ -258,13 +258,12 @@ from sklearn.model_selection import TimeSeriesSplit
 
 
 CONFIGS = import_from_path(
-    "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
+    "hyp_search_conf", "./hyp_search_conf.py"
 )
 
-raw_data_train = load_data(r"D:\fraud-detection-galsen\data\training.csv")
+raw_data_train = load_data("../data/training.csv")
 
-raw_data_pred = load_data(r"D:\fraud-detection-galsen\data\test.csv")
-
+raw_data_pred = load_data("../data/test.csv")
 
 # sklearn.set_config(enable_metadata_routing=True)
 
@@ -395,7 +394,7 @@ model = instantiate_model(model, **model_cfg)
  
 
 data_processor = load_workflow(cols_to_drop=COLUMNS_TO_DROP,
-                  rfe_estimator=estimator,
+                  feature_select_estimator=estimator,
                   pca_n_components=20,
                   detector_list=model_list,
                   session_gap_minutes=60*3,
@@ -409,8 +408,32 @@ data_processor = load_workflow(cols_to_drop=COLUMNS_TO_DROP,
                   top_k_best=10,
                   do_pca=False,
                   verbose=True,
-                  n_jobs=-4
+                  n_jobs=1
                   )
+
+# data_processor = load_workflow(
+#                           cols_to_drop=self.args.cols_to_drop,
+#                           scoring=selector_cfg.get('scoring','f1'),
+#                           feature_select_estimator=feature_select_estimator,
+#                           rfe_step=selector_cfg.get('step',3),
+#                           pca_n_components=20,
+#                           detector_list=detector_list,
+#                           cv_gap=self.args.cv_gap,
+#                           n_splits=self.args.n_splits,
+#                           session_gap_minutes=self.args.session_gap_minutes,
+#                           uid_cols=self.args.concat_features,
+#                           feature_selector_name=feature_selector_name,
+#                           seq_n_features_to_select=selector_cfg.get('n_features_to_select',3),
+#                           windows_size_in_days=self.args.windows_size_in_days,
+#                           cat_encoding_method=self.args.cat_encoding_method,
+#                           imputer_n_neighbors=9,
+#                           n_clusters=8,
+#                           top_k_best=selector_cfg.get('k',10),
+#                           # k_score_func=selector_cfg.get('score_func',10),
+#                           do_pca=do_pca,
+#                           verbose=self.verbose,
+#                           n_jobs=self.args.n_jobs
+#                           )
 
 y_train = raw_data_train['TX_FRAUD']
 # X_train = data_processor.fit_transform(X=raw_data_train, y=y_train) #.score(X=raw_data_train,y=y_train)
@@ -429,14 +452,14 @@ search_engine = RandomizedSearchCV(
     scoring='f1',
     cv=TimeSeriesSplit(n_splits=5,gap=5000),
     refit=True,
-    n_jobs=-4,
-    n_iter=100,
+    n_jobs=1,
+    n_iter=20,
     random_state=41,
     verbose=True,
 )
 
 search_engine.fit(X=raw_data_train, y=y_train)
 
-
+print(search_engine.best_estimator_)
 
 

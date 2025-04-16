@@ -50,10 +50,10 @@ if __name__ == "__main__":
 
     args.cv_n_iter = 500
     args.scoring = "f1"  # 'f1', precision
-    args.cv_method = "random" # optuna random
+    args.cv_method = "optuna" # optuna random
     args.cv_gap = 1051 * 5
     args.n_splits = 3 #
-    args.n_jobs = 1
+    args.n_jobs = -4
     args.delta_train = 50
     args.delta_delay = 7
     args.delta_test = 20
@@ -120,13 +120,6 @@ if __name__ == "__main__":
 
     # save args
     with open(os.path.join(args.work_dir, args.study_name + ".json"), "w") as file:
-        # cols_preprocessed = dict()
-        # cols_preprocessed["cols_to_drop"] = COLUMNS_TO_DROP
-        # cols_preprocessed["cols_one_hot"] = COLUMNS_TO_ONE_HOT_ENCODE
-        # cols_preprocessed["cols_cat_encorde"] = COLUMNS_TO_CAT_ENCODE
-        # cols_preprocessed["cols_to_std_Scale"] = COLUMNS_TO_STD_SCALE
-        # cols_preprocessed["cols_to_robust_scale"] = COLUMNS_TO_ROBUST_SCALE
-
         json.dump({"args": args.__dict__}, file, indent=4)
 
     objective_optuna = Tuner(
