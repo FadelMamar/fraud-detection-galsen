@@ -7,7 +7,6 @@ Created on Thu Apr 10 16:51:56 2025
 
 # %% funcs & imports
 import json
-from collections import OrderedDict
 from pathlib import Path
 import os
 import joblib
@@ -15,168 +14,19 @@ import json
 import optuna
 from datetime import datetime, date
 from optuna.samplers import TPESampler
-import numpy as np
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.model_selection._search import BaseSearchCV
-from fraudetect.modeling.utils import hyperparameter_tuning, get_model
 from fraudetect.config import (
     COLUMNS_TO_DROP,
-    COLUMNS_TO_ONE_HOT_ENCODE,
-    COLUMNS_TO_CAT_ENCODE,
-    COLUMNS_TO_STD_SCALE,
-    COLUMNS_TO_ROBUST_SCALE,
     Arguments,
 )
-# from fraudetect.features import load_transforms_pyod, build_encoder_scalers
-# from fraudetect.sampling import data_resampling
-from fraudetect import import_from_path, sample_cfg
-# from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
-# from fraudetect.dataset import load_data, MyDatamodule
-# from sklearn.decomposition import PCA, KernelPCA
-# from sklearn.preprocessing import StandardScaler, PolynomialFeatures
-# from sklearn.pipeline import Pipeline
+
 from fraudetect.modeling.utils import Tuner
-
-try:
-    HYP_CONFIGS = import_from_path(
-        "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
-    )
-except:
-    HYP_CONFIGS = import_from_path(
-        "hyp_search_conf", r"D:\fraud-detection-galsen\tools\hyp_search_conf.py"
-    )
-
-
-def __tune_models_hyp(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    models_config: dict,
-    n_splits: int = 5,
-    gap: int = 1051 * 5,
-    n_iter: int = 100,
-    scoring: str = "f1",
-    verbose: int = 0,
-    n_jobs: int = 8,
-    method: str = "random",
-) -> dict[str, BaseSearchCV]:
-    # 5 days, 1051 = average number of transactions per day
-
-    assert isinstance(scoring, str), "It should be a string."
-
-    cv = TimeSeriesSplit(n_splits=n_splits, gap=gap)
-
-    # best_results = dict()
-    # for model_name in models_config.keys():
-    # try:
-    model_name = list(models_config.keys())[0]
-    print(f"\nHyperparameter tuning for model: {model_name}")
-
-    model, params_config = get_model(model_name, models_config)
-
-    search_engine = hyperparameter_tuning(
-        cv=cv,
-        params_config=params_config,
-        X_train=X_train,
-        y_train=y_train,
-        model=model(),
-        scoring=scoring,
-        method=method,  # other, gridsearch
-        verbose=verbose,
-        n_iter=n_iter,
-        n_jobs=n_jobs,
-    )
-
-    if verbose:
-        score = search_engine.best_score_
-        print(f"mean {scoring} score for best_estimator: {score:.4f}")
-        print("best params: ", search_engine.best_params_)
-
-    # except Exception as e:
-    #     print(e)
-    #     traceback.print_exc()
-    #     continue
-
-    return {model_name: search_engine}  # best_results
-
-
-def run(
-    args: Arguments,
-    models_config: dict,
-    X_train,
-    y_train,
-    save_path: str = None,
-    verbose=0,
-) -> dict[str, BaseSearchCV]:
-    if np.any(np.isnan(X_train)):
-        raise ValueError("There are NaN values in X_train.")
-
-    assert len(models_config) == 1, "Provide only one model in models_config"
-
-    # tune models
-    best_results = __tune_models_hyp(
-        X_train,
-        y_train,
-        models_config=models_config,
-        n_splits=args.n_splits,
-        gap=args.cv_gap,
-        n_iter=args.cv_n_iter,
-        scoring=args.scoring,
-        verbose=verbose,
-        n_jobs=args.n_jobs,
-        method=args.cv_method,
-    )
-
-    # save results
-    if save_path:
-        joblib.dump(best_results, save_path)
-
-    return best_results
-
-
-def demo(args: Arguments, verbose=0):
-    def get_samplers_cfgs(sampler_names, configs):
-        sampler_cfgs = list()
-
-        for name in sampler_names:
-            cfg = configs.samplers[name]
-            cfg = sample_cfg(cfg)  # random sampling
-            sampler_cfgs.append({name: cfg})
-
-        return sampler_cfgs
-
-    def get_pyod_cfgs(names, configs):
-        # sample cfg randomly for debugging
-        outliers_det_configs = []
-        for name in sorted(names):
-            cfg = configs.outliers_detectors[name]
-            cfg = sample_cfg(cfg)
-            outliers_det_configs.append((name, cfg))
-
-        return OrderedDict(outliers_det_configs)
-
-    # sample cfg randomly for debugging
-    if args.sampler_names is not None:
-        args.sampler_cfgs = get_samplers_cfgs(args.sampler_names, HYP_CONFIGS)
-
-    if args.disable_pyod_outliers:
-        args.outliers_det_configs = None
-    else:
-        args.outliers_det_configs = get_pyod_cfgs(args.pyod_detectors, HYP_CONFIGS)
-
-    # run hyperparameter search
-    (X_train, y_train), col_transformer = build_dataset(args=args, verbose=verbose)
-    results = run(
-        args=args, X_train=X_train, y_train=y_train, save_path=None, verbose=verbose
-    )
-
-    return results
 
 
 # %%main
 if __name__ == "__main__":
     # Running
     args = Arguments()
-    args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
+    args.data_path = "../data/training.csv"
 
     args.model_names = (
         # "mlp",
@@ -217,7 +67,7 @@ if __name__ == "__main__":
 
     args.do_pca = True  # try pca
     args.do_poly_expansion = False
-    args.do_feature_selection = True
+    args.do_feature_selection = False
 
     args.disable_pyod_outliers = True
     args.pyod_detectors = [
@@ -255,7 +105,7 @@ if __name__ == "__main__":
     # for debugging
     # demo(args=args)
 
-    args.work_dir = Path(r"D:\fraud-detection-galsen\runs-optuna")
+    args.work_dir = Path("./runs-optuna")
     args.work_dir.mkdir(parents=True, exist_ok=True)
     args.work_dir = str(args.work_dir)  # for json serialization
 
@@ -283,7 +133,7 @@ if __name__ == "__main__":
         args=args, verbose=0, cat_encoding_kwards=cat_encoding_kwards
     )
 
-    objective_optuna.load_hyp_conf(r"D:\fraud-detection-galsen\tools\hyp_search_conf.py")
+    objective_optuna.load_hyp_conf("./hyp_search_conf.py")
 
     study.optimize(
         objective_optuna,
