@@ -24,6 +24,11 @@ from ..dataset import load_data
 from ..preprocessing import load_workflow, get_feature_selector
 from ..detectors import get_detector, instantiate_detector
 
+# try:
+#     import fireducks.pandas as pd
+#     # print('importing fireducks.pandas as pd')
+# except:
+#     import pandas as pd
 
 def evaluate(classifier, X, y):
     metrics = ["accuracy", "f1", "average_precision", "precision", "recall"]
@@ -435,7 +440,7 @@ class Tuner(object):
                           # k_score_func=selector_cfg.get('score_func',10),
                           do_pca=do_pca,
                           verbose=self.verbose,
-                          n_jobs=self.args.n_jobs
+                          n_jobs=1 #self.args.n_jobs
                           )
         
         classifier = Pipeline(steps=[('data_processor',data_processor),
