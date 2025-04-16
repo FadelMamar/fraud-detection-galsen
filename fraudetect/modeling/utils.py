@@ -282,7 +282,7 @@ class Tuner(object):
         self.args = deepcopy(args)
         self.pyod_detectors = deepcopy(sorted(self.args.pyod_detectors))
         self.pyod_choices = [
-            json.dumps(list(k)) for k in combinations(self.pyod_detectors, 4)
+            json.dumps(list(k)) for k in combinations(self.pyod_detectors, min(4,len(args.pyod_detectors)))
         ]
         self.model_names = deepcopy(args.model_names)
         self.disable_pyod = deepcopy(args.disable_pyod_outliers)
@@ -293,13 +293,10 @@ class Tuner(object):
         self.cat_encoding_kwards=cat_encoding_kwards
         self.selector = None
                 
-        self.raw_data_train = load_data(args.data_path)
-        
-        # self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
+        raw_data_train = load_data(args.data_path)
+        self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
         self.y_train = self.raw_data_train['TX_FRAUD']
-        
-        self.classifier = None
-       
+               
         self.best_score = 0.0
         self.best_records = dict()
         self.ckpt_filename = os.path.join(
@@ -319,7 +316,7 @@ class Tuner(object):
     def save_checkpoint(self,model_name:str, score: float, results: BaseSearchCV):
         if score >= self.best_score:
             self.best_score = score
-            vals = [results, self.classifier]
+            vals = [results,]
             joblib.dump(vals, self.ckpt_filename)
             self.best_records[model_name]=results
 
@@ -332,14 +329,12 @@ class Tuner(object):
     def __call__(self, trial):
         self.count_iter += 1
 
-        X = self.raw_data_train.copy()
+        X = self.X_train.copy()
         y = self.y_train.copy()
 
         self.transform_pipeline = None
         self.selector = None
     
-        pipe = []
-
         # select model
         model_name = trial.suggest_categorical(
             "classifier",
@@ -351,9 +346,10 @@ class Tuner(object):
                 
         # PCA
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
+        pca_n_components = None
         if do_pca:
-            n_components = trial.suggest_int(
-                "n_components", 5, 100, 3
+            pca_n_components = trial.suggest_int(
+                "n_components", 5, 50, 5
             )
                    
         # select outlier detector for data aug
@@ -379,27 +375,7 @@ class Tuner(object):
                 detector = instantiate_detector(detector, cfg)
                 detector_list.append(detector)
         
-        # select samplers
-        # sampler_cfgs, sampler_names = None, None
-        # if not trial.suggest_categorical(
-        #     "disable_samplers", [True, self.disable_samplers]
-        # ):
-        #     conbimed_sampler = trial.suggest_categorical(
-        #         "conbined_sampler", self.HYP_CONFIGS.combinedsamplers
-        #     )
-        #     sampler_names = [
-        #         conbimed_sampler,
-        #     ]
-
-        # augment or resample data on the fly if 
-        # (X, y), fitted_models_pyod = self.datamodule.augment_resample_dataset(
-        #     X=X,
-        #     y=y,
-        #     outliers_det_configs=outliers_det_configs,
-        #     sampler_names=sampler_names,
-        #     sampler_cfgs=sampler_cfgs,
-        #     fitted_detector_list=None,
-        # )
+        
 
         # feature selector:
         do_feature_selection =  trial.suggest_categorical("select_features", 
@@ -424,7 +400,7 @@ class Tuner(object):
                           scoring=selector_cfg.get('scoring','f1'),
                           feature_select_estimator=feature_select_estimator,
                           rfe_step=selector_cfg.get('step',3),
-                          pca_n_components=20,
+                          pca_n_components=pca_n_components or 20,
                           detector_list=detector_list,
                           cv_gap=self.args.cv_gap,
                           n_splits=self.args.n_splits,

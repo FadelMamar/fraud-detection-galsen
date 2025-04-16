@@ -33,7 +33,6 @@ if __name__ == "__main__":
         "decisionTree",
         "logisticReg",
         "svc",
-        # "sgdClassifier",
         # "randomForest",
         # "balancedRandomForest",
         # "gradientBoosting",
@@ -43,17 +42,17 @@ if __name__ == "__main__":
 
     current_time = datetime.now().strftime("%H-%M")
 
-    args.study_name = "debug"
+    args.study_name = "small-models"
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
     args.optuna_n_trials = 20
 
-    args.cv_n_iter = 500
+    args.cv_n_iter = 200
     args.scoring = "f1"  # 'f1', precision
     args.cv_method = "optuna" # optuna random
     args.cv_gap = 1051 * 5
     args.n_splits = 3 #
-    args.n_jobs = -4
+    args.n_jobs = 4
     args.delta_train = 50
     args.delta_delay = 7
     args.delta_test = 20
@@ -67,9 +66,9 @@ if __name__ == "__main__":
 
     args.do_pca = True  # try pca
     args.do_poly_expansion = False
-    args.do_feature_selection = False
+    args.do_feature_selection = True
 
-    args.disable_pyod_outliers = True
+    args.disable_pyod_outliers = False
     args.pyod_detectors = [
         "abod",
         "cblof",
@@ -78,7 +77,7 @@ if __name__ == "__main__":
         "knn",
         "loda",
         "mcd",
-        "mo_gaal",
+        # "mo_gaal",
     ]
 
     args.sampler_names = None
@@ -114,7 +113,7 @@ if __name__ == "__main__":
         direction="maximize",
         sampler=TPESampler(multivariate=True, group=True),
         study_name=args.study_name,
-        load_if_exists=False,
+        load_if_exists=True,
         storage="sqlite:///hypsearch.sql",
     )
 

@@ -162,7 +162,7 @@ def load_feature_selector(
         )
     
     elif name == "selectkbest":
-        selector = SelectKBest(score_func=score_func,
+        selector = SelectKBest(score_func=k_score_func,
                                k=top_k_best
                                )
     else:

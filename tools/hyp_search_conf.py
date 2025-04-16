@@ -545,21 +545,21 @@ feature_selector = dict()
 # feature_select_estimator=['decisionTree','balancedRandomForest']
 scoring=['f1',]
 # cv=TimeSeriesSplit(n_splits=5,gap=5000)
-feature_selector["rfecv"] = dict(selector=RFECV,
-                                 scoring=scoring,
-                                 # estimator=feature_select_estimator,
-                                 step=list(range(1,10)),
-                                 # cv=[cv,]
-                                 )
+# feature_selector["rfecv"] = dict(selector=RFECV,
+#                                  scoring=scoring,
+#                                  # estimator=feature_select_estimator,
+#                                  step=list(range(1,10)),
+#                                  # cv=[cv,]
+#                                  )
 
 
-feature_selector["sequential"] = dict(selector=SequentialFeatureSelector,
-                                      # estimator=feature_select_estimator,
-                                      n_features_to_select=list(range(1,10)),
-                                      scoring=scoring,
-                                      tol=[1e-4],
-                                      # cv=[cv,]
-)   
+# feature_selector["sequential"] = dict(selector=SequentialFeatureSelector,
+#                                       # estimator=feature_select_estimator,
+#                                       n_features_to_select=list(range(1,10)),
+#                                       scoring=scoring,
+#                                       tol=[1e-4],
+#                                       # cv=[cv,]
+# )   
 
 feature_selector["selectkbest"] = dict(selector=SelectKBest,
                                       # score_func=['f_classif','mutual_info_classif'],
