@@ -1,13 +1,9 @@
-from collections.abc import Iterable
 from pyod.models.base import BaseDetector
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from typing import Sequence
 from numbers import Integral
-from collections import OrderedDict
 from functools import partial
-import sklearn
 from sklearn.base import TransformerMixin, BaseEstimator, _fit_context
 from sklearn.utils.validation import validate_data
 from sklearn.cluster import MiniBatchKMeans
@@ -18,18 +14,19 @@ from category_encoders import (
     BaseNEncoder,
     CatBoostEncoder,
 )
-import os
-import joblib
-import tempfile
-from joblib import Parallel, delayed
+
 from sklearn.utils._param_validation import Interval
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, SplineTransformer
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.feature_selection import RFECV, SequentialFeatureSelector, SelectKBest, f_classif, mutual_info_classif
 from sklearn.decomposition import PCA
+from sklearn.kernel_approximation import Nystroem
 from sklearn.pipeline import Pipeline, FeatureUnion, make_pipeline
+from statsmodels.tsa.seasonal import seasonal_decompose
+from sklearn.linear_model import LinearRegression
+from scipy.fft import fft
 import pandas as pd
 import numpy as np
 from sklearn.tree import DecisionTreeClassifier
@@ -99,28 +96,28 @@ def load_cols_transformer(df:pd.DataFrame,
                           onehot_encoder = OneHotEncoder(handle_unknown='ignore'),
                           cat_encoding_method='binary',
                           **cat_encoding_kwargs):
-
+    
+    numeric_cols = df.select_dtypes(include=["number"]).columns
+    transformers = [("scaled", scaler, numeric_cols)]
 
     # categorical columns
-    cols = df.select_dtypes(include=["object", "string"]).columns
-    cols_onehot = [col for col in cols if df[col].nunique() < onehot_threshold]
-    cols_cat_encode = [
-        col for col in cols if df[col].nunique() >= onehot_threshold
-    ]
-    numeric_cols = df.select_dtypes(include=["number"]).columns
+    if str(cat_encoding_method) == 'None':
+        print('Categorical columns will not be encoded by ColumnTransformer.')
 
-    scaler =  Pipeline(
-            steps=[("scaler", scaler)],
-        )
-    cat_encoder = load_cat_encoding(
+    else:
+        cols = df.select_dtypes(include=["object", "string"]).columns
+        cols_onehot = [col for col in cols if df[col].nunique() < onehot_threshold]
+        cols_cat_encode = [
+            col for col in cols if df[col].nunique() >= onehot_threshold
+        ]
+        cat_encoder = load_cat_encoding(
             cat_encoding_method=cat_encoding_method, **cat_encoding_kwargs
         )
-        
-    transformers = [
-        ("onehot", onehot_encoder, cols_onehot),
-        ("scaled", scaler, numeric_cols),
-        ("cat_encode", cat_encoder, cols_cat_encode),
-    ]
+        transformers = transformers + [
+                ("onehot", onehot_encoder, cols_onehot),
+                ("cat_encode", cat_encoder, cols_cat_encode),
+            ]
+            
     col_transformer = ColumnTransformer(
         transformers, remainder="passthrough", n_jobs=n_jobs, verbose=False
     )
@@ -497,12 +494,17 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
         self.n_jobs = n_jobs
 
+        self._columns_of_transformed_data = None
+    
+    def check_dataframe(self,X:pd.DataFrame):
+        
+        assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
+        assert X.isna().sum().sum() < 1, "Found NaN values"
+
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X: pd.DataFrame, y=None,**fit_params):
 
-        assert isinstance(X, pd.DataFrame), "provide a DataFrame"
-
-        # validate_data(self,X=X,y=y)
+        self.check_dataframe(X)
 
         self._col_transformer = load_cols_transformer(df=X,
                                                     onehot_threshold=self.onehot_threshold,
@@ -531,13 +533,13 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
     def transform(self, X:pd.DataFrame, y=None):
         
-        assert isinstance(X,pd.DataFrame), "Give a pandas DataFrame."
+        self.check_dataframe(X)
 
         X = self._col_transformer.transform(X=X)
         
         if self._imputer is not None:
             X = self._imputer.fit_transform(X=X,y=y)
-        
+                
         return X
 
     def fit_transform(self, X, y = None, **fit_params):
@@ -561,11 +563,20 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             Interval(Integral, 1, None, closed="left"),
         ],
         "add_imputer":[bool],
+        "add_fraud_rate_features":[bool],
         "session_gap_minutes":[int],
         "n_clusters":[int],
         "cat_encoding_method":[str],
         "uid_col_name":[str],
-        "cluster_on_feature":[str]
+        "cluster_on_feature":[str],
+        'use_spline':[bool],
+        'spline_degree':[int],
+        'spline_n_knots':[int],
+        'use_sincos':[bool],
+        'use_nystrom':[bool],
+        'nystroem_kernel':[str],
+        'add_seasonal_features':[bool],
+        'add_fft':[bool]
     }
     
     def __init__(
@@ -575,7 +586,17 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         session_gap_minutes: int = 30,
         n_clusters: int = 8,
         uid_col_name:str="CustomerUID",
+        add_fraud_rate_features:bool=True,
         cluster_on_feature:str="CUSTOMER_ID",
+        use_spline=False,
+        spline_degree=3,
+        spline_n_knots=6,
+        use_sincos=False,
+        use_nystrom=False,
+        add_seasonal_features=False,
+        add_fft=False,
+        nystroem_kernel='poly',
+        nystroem_components=50,
         behavioral_drift_cols:list[str]=["AccountId",]
     ):
         
@@ -583,9 +604,23 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self.uid_cols = uid_cols
         self.uid_col_name = uid_col_name
         self.behavioral_drift_cols = behavioral_drift_cols
+        self.add_fraud_rate_features= add_fraud_rate_features
         self.session_gap_minutes = session_gap_minutes
         self.n_clusters = n_clusters
         self.cluster_on_feature = cluster_on_feature
+
+        self.add_seasonal_features=add_seasonal_features
+        self.add_fft = add_fft
+
+        self.use_spline = use_spline
+        self.spline_degree=spline_degree
+        self.spline_n_knots=spline_n_knots
+
+        self.use_sincos = use_sincos
+
+        self.use_nystrom = use_nystrom
+        self.nystroem_kernel=nystroem_kernel
+        self.nystroem_components=nystroem_components
     
     def check_dataframe(self,X:pd.DataFrame):
         
@@ -596,24 +631,42 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
     def fit(self, X:pd.DataFrame, y=None, **fit_params):
         
         self.check_dataframe(X=X)
-        
+
         # reset index > causes issues when doing cross-val
         df = X.copy().reset_index(drop=True)
+        if self.add_fraud_rate_features:
+            self._product_fraud_rate = (
+                df.groupby("ProductId")["TX_FRAUD"].mean().rename("ProductFraudRate")
+            )
+            self._provider_fraud_rate = (
+                df.groupby("ProviderId")["TX_FRAUD"].mean().rename("ProviderFraudRate")
+            )
+            self._channel_fraud_rate = (
+                df.groupby("ChannelId")["TX_FRAUD"].mean().rename("ChannelIdFraudRate")
+            )          
         
-        self._customer_cluster_labels = None
+        df_cyclical = self._get_cyclical_data(df=X)
+        self._cyclical_features = list(df_cyclical.columns)
+
+        if self.use_spline:
+            self._spline_transformers = {}
+            for feature in self._cyclical_features:
+                transformer = SplineTransformer(degree=self.spline_degree, n_knots=self.spline_n_knots, extrapolation='periodic')
+                self._spline_transformers[feature] = transformer.fit(df_cyclical[[feature]])
         
-        self._product_fraud_rate = (
-            df.groupby("ProductId")["TX_FRAUD"].mean().rename("ProductFraudRate")
-        )
-        self._provider_fraud_rate = (
-            df.groupby("ProviderId")["TX_FRAUD"].mean().rename("ProviderFraudRate")
-        )
-        self._channel_fraud_rate = (
-            df.groupby("ChannelId")["TX_FRAUD"].mean().rename("ChannelIdFraudRate")
-        )
+        if self.use_nystrom:
+            self._nystrom = Nystroem(kernel=self.nystroem_kernel, 
+                                    degree=3, 
+                                    n_components=self.nystroem_components,
+                                    random_state=41)
+            self._nystrom.fit(df_cyclical)
+
+        self.feature_names_in_ = list(X.columns)
+        self.n_features_in_ = len(self.feature_names_in_)
+        self.is_fitted_ = True
 
         # if self.n_clusters is not None:
-        # self._compute_clusters_customers(df)
+        #     self._compute_clusters_customers(df)
 
         return self
 
@@ -638,12 +691,25 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df = self._add_categorical_cross_features(df)
         df = self._add_temporal_identity_interactions(df)
         df = self._add_frequency_features(df)
-        df = self._add_fraud_rate_features(df)
+
+        if any([self.use_nystrom, self.use_sincos, self.use_spline]):
+            df = self._add_cyclical_features_transform(df)
+
+        if self.add_fraud_rate_features:
+            df = self._add_fraud_rate_features(df)
+        
+        if self.add_seasonal_features:
+            df = self._add_grouped_seasonal_decomposition(df=df,freq='D',period=7)
+        
+        if self.add_fft:
+            df = self._add_grouped_fft_features(df=df,freq='D',top_n_freqs=5)                
 
         # if self.n_clusters is not None:
         #     df = self._add_customer_clusters(df)
 
         df = self._cleanup(df)
+
+        self.check_dataframe(df)
 
         return df
 
@@ -658,6 +724,19 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         )
 
         return df
+
+    def _get_cyclical_data(self,df:pd.DataFrame):
+
+        X = df[["TX_DATETIME",]].copy()
+
+        X["Hour"] = X["TX_DATETIME"].dt.hour
+        X["DayOfWeek"] = X["TX_DATETIME"].dt.dayofweek
+
+        X.drop(columns=['TX_DATETIME'],inplace=True)
+
+        return X
+
+
 
     def _compute_clusters_customers(self, df) -> None:
         # -- Compute clusters
@@ -696,7 +775,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df["DayOfWeek"] = df["TX_DATETIME"].dt.dayofweek
         df["IsWeekend"] = df["DayOfWeek"].isin([5, 6]).astype(int)
         df["IsNight"] = df["Hour"].between(0, 6).astype(int)
-
+        
         for col in ["AccountId", "CUSTOMER_ID"]:
 
             df.sort_values(by=[col, "TX_DATETIME"],inplace=True)
@@ -918,6 +997,112 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         )
         return df
 
+    def _add_cyclical_features_transform(self,df):
+
+        X = df
+
+        if self.use_spline:
+            for feature in self._cyclical_features:
+                transformed = self._spline_transformers[feature].transform(X[[feature]])
+                spline_cols = [f'{feature}_spline_{i}' for i in range(transformed.shape[1])]
+                X[spline_cols] = transformed
+
+        if self.use_sincos:
+            for feature in self._cyclical_features:
+                max_val = X[feature].max()
+                X[f'{feature}_sin'] = np.sin(2 * np.pi * X[feature] / max_val)
+                X[f'{feature}_cos'] = np.cos(2 * np.pi * X[feature] / max_val)
+
+        if self.use_nystrom:
+            kernel_features = self._nystrom.transform(X[self._cyclical_features])
+            kernel_cols = [f'nystrom_{i}' for i in range(kernel_features.shape[1])]
+            X[kernel_cols] = kernel_features
+        
+        return df
+    
+    def _add_grouped_seasonal_decomposition(self, df, freq='D', period=7):
+        features = []
+
+        group_key = 'AccountId'
+        value_col = 'TX_AMOUNT'
+        time_col = 'TX_DATETIME'
+
+        for group_val, group_df in df.groupby(group_key):
+            ts = (
+                group_df.set_index(time_col)[value_col]
+                .resample(freq)
+                .sum()
+                .fillna(0)
+            )
+
+            if len(ts) < period * 2:
+                continue
+
+            try:
+                decomposition = seasonal_decompose(ts, model='additive', period=period)
+                trend = decomposition.trend.dropna()
+                seasonal = decomposition.seasonal.dropna()
+                resid = decomposition.resid.dropna()
+
+                # Trend slope
+                X_t = np.arange(len(trend)).reshape(-1, 1)
+                y_t = trend.values
+                model = LinearRegression().fit(X_t, y_t)
+                trend_slope = model.coef_[0]
+
+                # Seasonal amplitude
+                seasonal_amp = seasonal.max() - seasonal.min()
+
+                # Residual variance
+                resid_var = np.var(resid)
+
+                features.append({
+                    group_key: group_val,
+                    'trend_slope': trend_slope,
+                    'seasonal_amplitude': seasonal_amp,
+                    'residual_variance': resid_var
+                })
+
+            except Exception:
+                continue
+        
+        seasonal_df = pd.DataFrame(features)
+        df = df.merge(seasonal_df, on=group_key, how='left') #.fillna(0)       
+
+        return df
+
+    def _add_grouped_fft_features(self, df, freq='D', top_n_freqs=5):
+        
+        features = []
+        group_key = 'AccountId'
+        value_col = 'TX_AMOUNT'
+        time_col = 'TX_DATETIME'
+
+        for group_val, group_df in df.groupby(group_key):
+            ts = (
+                group_df.set_index(time_col)[value_col]
+                .resample(freq)
+                .sum()
+                .fillna(0)
+            )
+
+            if len(ts) < top_n_freqs * 2:
+                continue
+
+            fft_vals = np.abs(fft(ts.values))
+            fft_vals = fft_vals[1:top_n_freqs + 1]  # Exclude DC component
+
+            fft_dict = {group_key: group_val}
+            for i, val in enumerate(fft_vals, start=1):
+                fft_dict[f'fft_freq_{i}'] = val
+
+            features.append(fft_dict)
+        
+        fft_df = pd.DataFrame(features)
+        df = df.merge(fft_df, on=group_key, how='left') #.fillna(0)
+
+        return df
+
     def _cleanup(self, df):
         df.drop(
             columns=[
@@ -939,7 +1124,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
 
 def load_workflow(cols_to_drop,
-                  pca_n_components,
+                  pca_n_components=20,
                   detector_list=None,
                   n_splits=5,
                   cv_gap=5000,
@@ -947,14 +1132,24 @@ def load_workflow(cols_to_drop,
                   onehot_threshold=9,
                   session_gap_minutes=60*3,
                   uid_cols=[None,],
+                  add_fraud_rate_features:bool=True,
                   behavioral_drift_cols=["AccountId",],
                   feature_select_estimator=DecisionTreeClassifier(),
                   feature_selector_name:str|None="selectkbest",
                   seq_n_features_to_select=3,
                   windows_size_in_days=[1,7,30],
-                  cat_encoding_method='binary',
+                  cat_encoding_method:str|None='binary',
                   cluster_on_feature="CUSTOMER_ID",
                   imputer_n_neighbors=9,
+                  add_fft=False,
+                    add_seasonal_features=False,
+                    use_nystrom=False,
+                    use_sincos=False,
+                    use_spline=False,
+                    spline_degree=3,
+                    spline_n_knots=6,
+                    nystroem_kernel='poly',
+                    nystroem_components=50,
                   add_imputer=False,
                   rfe_step=3,
                   n_clusters=8,
@@ -969,7 +1164,7 @@ def load_workflow(cols_to_drop,
 
 
     encoder = FeatureEncoding(add_imputer=add_imputer,
-                                cat_encoding_method=cat_encoding_method,
+                                cat_encoding_method=str(cat_encoding_method),
                                 imputer_n_neighbors=imputer_n_neighbors,
                                 n_jobs=n_jobs,
                                 onehot_threshold=onehot_threshold,
@@ -978,8 +1173,18 @@ def load_workflow(cols_to_drop,
    
     feature_engineer = FraudFeatureEngineer(windows_size_in_days=windows_size_in_days,
                                              uid_cols=uid_cols,
+                                             add_fraud_rate_features=add_fraud_rate_features,
                                              session_gap_minutes=session_gap_minutes,
                                              n_clusters=n_clusters,
+                                             add_fft=add_fft,
+                                             add_seasonal_features=add_seasonal_features,
+                                             use_nystrom=use_nystrom,
+                                             use_sincos=use_sincos,
+                                             use_spline=use_spline,
+                                             spline_degree=spline_degree,
+                                            spline_n_knots=spline_n_knots,
+                                            nystroem_kernel=nystroem_kernel,
+                                            nystroem_components=nystroem_components,
                                              behavioral_drift_cols=behavioral_drift_cols,
                                              cluster_on_feature=cluster_on_feature,
                                              uid_col_name="CustomerUID", # name given to uid cols created from interactions of uid_cols
@@ -1014,7 +1219,7 @@ def load_workflow(cols_to_drop,
                                     )
     
     # Final Pipeline
-    steps = [feature_engineer,dropper,encoder]
+    steps = [feature_engineer, dropper, encoder]
     if isinstance(advanced_features, TransformerMixin):
         steps.append(advanced_features)
     

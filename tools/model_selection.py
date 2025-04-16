@@ -64,11 +64,11 @@ if __name__ == "__main__":
     args.session_gap_minutes=60*3 
     args.onehot_threshold=9
 
-    args.do_pca = True  # try pca
+    args.do_pca = False  # try pca
     args.do_poly_expansion = False
-    args.do_feature_selection = True
+    args.do_feature_selection = False
 
-    args.disable_pyod_outliers = False
+    args.disable_pyod_outliers = True
     args.pyod_detectors = [
         "abod",
         "cblof",

@@ -232,7 +232,7 @@ COLUMNS_TO_DROP = [
 
 
 #%% Preprocessing pipeline
-
+from pathlib import Path
 from fraudetect.dataset import load_data
 from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
 from fraudetect.preprocessing.preprocessing import (load_cols_transformer,
@@ -256,14 +256,15 @@ from joblib import Memory
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import TimeSeriesSplit
 
-
+CURDIR = Path(__file__).parent
+cfg_path = CURDIR / "hyp_search_conf.py"
 CONFIGS = import_from_path(
-    "hyp_search_conf", "./hyp_search_conf.py"
+    "hyp_search_conf", cfg_path
 )
 
-raw_data_train = load_data("../data/training.csv")
+raw_data_train = load_data(CURDIR / "../data/training.csv")
 
-raw_data_pred = load_data("../data/test.csv")
+raw_data_pred = load_data(CURDIR / "../data/test.csv")
 
 # sklearn.set_config(enable_metadata_routing=True)
 
@@ -396,20 +397,29 @@ model = instantiate_model(model, **model_cfg)
 data_processor = load_workflow(cols_to_drop=COLUMNS_TO_DROP,
                   feature_select_estimator=estimator,
                   pca_n_components=20,
-                  detector_list=model_list,
+                  detector_list=None, #model_list,
                   session_gap_minutes=60*3,
                   uid_cols=[None,],
                   add_imputer=False,
                   feature_selector_name=None,#"selectkbest",
                   windows_size_in_days=[1,7,30],
-                  cat_encoding_method='binary',
+                  cat_encoding_method='binary', # TODO
                   imputer_n_neighbors=9,
                   n_clusters=8,
                   top_k_best=10,
                   do_pca=False,
                   verbose=True,
-                  n_jobs=1
-                  )
+                  n_jobs=1,
+                  add_fft=False, # TODO
+                add_seasonal_features=True, # TODO
+                use_nystrom=False,
+                nystroem_components=50,
+                nystroem_kernel='poly',
+                use_sincos=False,
+                use_spline=False, 
+                spline_degree=3,
+                spline_n_knots=6,
+                )
 
 # data_processor = load_workflow(
 #                           cols_to_drop=self.args.cols_to_drop,
@@ -436,30 +446,38 @@ data_processor = load_workflow(cols_to_drop=COLUMNS_TO_DROP,
 #                           )
 
 y_train = raw_data_train['TX_FRAUD']
-# X_train = data_processor.fit_transform(X=raw_data_train, y=y_train) #.score(X=raw_data_train,y=y_train)
+X_train = data_processor.fit_transform(X=raw_data_train, y=y_train) #.score(X=raw_data_train,y=y_train)
+X_pred = data_processor.transform(raw_data_pred)
 
-# X_pred = data_processor.transform(raw_data_pred)
+print('X_train.shape: ',X_train.shape)
+print('X_pred.shape: ',X_pred.shape)
 
-classifier = Pipeline(steps=[('data_processor',data_processor),
-                       ('model',model)]
-                      )
+print('Num NaN train', (X_train==np.nan).sum())
 
-params_config = {f"model__{k}":v for k,v in model_cfgs.items()}
 
-search_engine = RandomizedSearchCV(
-    classifier,
-    param_distributions=params_config,
-    scoring='f1',
-    cv=TimeSeriesSplit(n_splits=5,gap=5000),
-    refit=True,
-    n_jobs=1,
-    n_iter=20,
-    random_state=41,
-    verbose=True,
-)
 
-search_engine.fit(X=raw_data_train, y=y_train)
 
-print(search_engine.best_estimator_)
+
+# classifier = Pipeline(steps=[('data_processor',data_processor),
+#                        ('model',model)]
+#                       )
+
+# params_config = {f"model__{k}":v for k,v in model_cfgs.items()}
+
+# search_engine = RandomizedSearchCV(
+#     classifier,
+#     param_distributions=params_config,
+#     scoring='f1',
+#     cv=TimeSeriesSplit(n_splits=5,gap=5000),
+#     refit=True,
+#     n_jobs=1,
+#     n_iter=20,
+#     random_state=41,
+#     verbose=True,
+# )
+
+# search_engine.fit(X=raw_data_train, y=y_train)
+
+# print(search_engine.best_estimator_)
 
 
