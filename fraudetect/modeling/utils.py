@@ -145,21 +145,21 @@ def hyperparameter_tuning(
             verbose=verbose,
         )
 
-    elif method == "hyperopt":
-        loss_fn = lambda y_true, y_pred: 1.0 - f1_score(
-            y_true=y_true,
-            y_pred=y_pred,
-            pos_label=1,
-            zero_division=1,
-        )
-        search_engine = HyperoptEstimator(
-            classifier=model,
-            algo=tpe.suggest,
-            max_evals=n_iter,
-            loss_fn=loss_fn,
-            n_jobs=n_jobs,
-            trial_timeout=60 * 2,
-        )
+    # elif method == "hyperopt":
+    #     loss_fn = lambda y_true, y_pred: 1.0 - f1_score(
+    #         y_true=y_true,
+    #         y_pred=y_pred,
+    #         pos_label=1,
+    #         zero_division=1,
+    #     )
+    #     search_engine = HyperoptEstimator(
+    #         classifier=model,
+    #         algo=tpe.suggest,
+    #         max_evals=n_iter,
+    #         loss_fn=loss_fn,
+    #         n_jobs=n_jobs,
+    #         trial_timeout=60 * 2,
+    #     )
     else:
         raise ValueError(
             "Invalid method. Choose either 'gridsearch',hyperopt, 'optuna' or 'random'."
@@ -207,11 +207,6 @@ def _tune_models_hyp(
     assert isinstance(scoring, str), "It should be a string."
 
     cv = TimeSeriesSplit(n_splits=n_splits, gap=gap)
-
-    # model_name = list(models_config.keys())[0]
-    # print(f"\nHyperparameter tuning for model: {model_name}")
-
-    # model, params_config = get_model(model_name, models_config)
 
     search_engine = hyperparameter_tuning(
         cv=cv,
@@ -293,8 +288,8 @@ class Tuner(object):
         self.cat_encoding_kwards=cat_encoding_kwards
         self.selector = None
                 
-        raw_data_train = load_data(args.data_path)
-        self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
+        self.raw_data_train = load_data(args.data_path)
+        # self.X_train = raw_data_train #.drop(columns=['TX_FRAUD'])
         self.y_train = self.raw_data_train['TX_FRAUD']
                
         self.best_score = 0.0
@@ -328,9 +323,6 @@ class Tuner(object):
 
     def __call__(self, trial):
         self.count_iter += 1
-
-        X = self.X_train.copy()
-        y = self.y_train.copy()
 
         self.transform_pipeline = None
         self.selector = None
@@ -419,12 +411,20 @@ class Tuner(object):
                           n_jobs=1 #self.args.n_jobs
                           )
         
+        if model_name == 'histGradientBoosting':
+            model.set_params(categorical_features='from_dtype')
+        elif model_name == 'catboost':
+            raise NotImplementedError
+            # model.set_params(cat_features=[])
+            # see https://catboost.ai/docs/en/concepts/python-reference_catboostclassifier#cat_features
+        
         classifier = Pipeline(steps=[('data_processor',data_processor),
                                ('model',model)]
                             )
-        params_config = {f"model__{k}":v for k,v in models_config.items()}
+        params_config = {f"model__{k}":v for k,v in models_config.items() if len(v)>1}
 
-        # try:
+        X = self.raw_data_train.copy()
+        y = self.y_train.copy()
         results = _run(
             args=self.args,
             classifier=classifier,
