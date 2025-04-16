@@ -79,7 +79,7 @@ class Arguments:
     cat_encoding_hash_method: str = "md5"
     cat_encoding_hash_n_components: int = 8
     add_imputer: bool = False
-    concat_features: Sequence = ("AccountId", "CUSTOMER_ID")  # or None to disable
+    concat_features: Sequence = (None,) #("AccountId", "CUSTOMER_ID")  # or None to disable
     concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )

@@ -136,6 +136,7 @@ def load_feature_selector(
     rfe_step:int=3,
     top_k_best:int=10,
     scoring: str = "f1",
+    k_score_func=mutual_info_classif,
     n_jobs: int = 4,
     verbose: bool = False,
 ) -> Pipeline:
@@ -161,7 +162,7 @@ def load_feature_selector(
         )
     
     elif name == "selectkbest":
-        selector = SelectKBest(score_func=f_classif,
+        selector = SelectKBest(score_func=score_func,
                                k=top_k_best
                                )
     else:
@@ -169,6 +170,19 @@ def load_feature_selector(
 
     return Pipeline(steps=[('feature_selector',selector)])
 
+def get_feature_selector(name: str, config: dict) -> dict:
+    """
+    Get the configuration based on the name.
+    """
+    if name not in config:
+        raise ValueError(f"Model {name} not found in config.")
+
+    cfg = config[name].copy()
+
+    # Remove from the config dictionary
+    selector = cfg.pop("selector")
+
+    return selector, cfg
 
 # ------------ pyod detectors
 def fit_outliers_detectors(
@@ -363,10 +377,12 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
         "verbose":[bool],
         "do_pca":[bool],
         "pca_n_components":[int],
+        "k_score_func":[callable]
     }
 
     def __init__(self,
                  feature_selector_name:str='selectkbest',
+                 k_score_func=mutual_info_classif,
                  estimator=DecisionTreeClassifier(),
                  n_splits=5,
                  cv_gap=5000,
@@ -384,6 +400,7 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
         self.rfe_step=rfe_step
         self.top_k_best=top_k_best
         self.feature_selector_name = feature_selector_name
+        self.k_score_func = k_score_func
         
         self.scoring = scoring
         
@@ -427,6 +444,7 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
                                                    estimator=self.estimator,
                                                    name = self.feature_selector_name,
                                                    top_k_best=self.top_k_best,
+                                                   k_score_func=self.k_score_func,
                                                    rfe_step=self.rfe_step,
                                                    scoring = self.scoring,
                                                    n_jobs = self.n_jobs,
@@ -921,7 +939,7 @@ def load_workflow(cols_to_drop,
                   session_gap_minutes=60*3,
                   uid_cols=[None,],
                   behavioral_drift_cols=["AccountId",],
-                  rfe_estimator=DecisionTreeClassifier(),
+                  feature_select_estimator=DecisionTreeClassifier(),
                   feature_selector_name:str|None="selectkbest",
                   seq_n_features_to_select=3,
                   windows_size_in_days=[1,7,30],
@@ -932,6 +950,7 @@ def load_workflow(cols_to_drop,
                   rfe_step=3,
                   n_clusters=8,
                   top_k_best=10,
+                  k_score_func=mutual_info_classif,
                   do_pca=True,
                   verbose=False,
                   n_jobs=2):
@@ -961,9 +980,10 @@ def load_workflow(cols_to_drop,
     advanced_features = []
     if (feature_selector_name is not None) or do_pca:
         enhancer = AdvancedFeatures(verbose=bool(verbose),
-                                            estimator=rfe_estimator,
+                                            estimator=feature_select_estimator,
                                             do_pca=do_pca,
                                             top_k_best=top_k_best,
+                                            k_score_func=k_score_func,
                                             rfe_step=rfe_step,
                                             n_jobs=n_jobs,
                                             n_splits=n_splits,

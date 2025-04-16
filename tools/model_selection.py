@@ -180,9 +180,9 @@ if __name__ == "__main__":
 
     args.model_names = (
         # "mlp",
-        # "decisionTree",
+        "decisionTree",
         "logisticReg",
-        # "svc",
+        "svc",
         # "sgdClassifier",
         # "randomForest",
         # "balancedRandomForest",
@@ -196,7 +196,7 @@ if __name__ == "__main__":
     args.study_name = "debug"
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
-    args.optuna_n_trials = 2
+    args.optuna_n_trials = 20
 
     args.cv_n_iter = 500
     args.scoring = "f1"  # 'f1', precision
@@ -233,10 +233,10 @@ if __name__ == "__main__":
 
     args.sampler_names = None
     args.sampler_cfgs = None
-    args.disable_samplers = False
+    args.disable_samplers = True
 
     args.concat_features = (
-        None  # ("AccountId", "CUSTOMER_ID") # ("AccountId", "CUSTOMER_ID") or None
+        None,  # ("AccountId", "CUSTOMER_ID") # ("AccountId", "CUSTOMER_ID") or None
     )
     args.concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14

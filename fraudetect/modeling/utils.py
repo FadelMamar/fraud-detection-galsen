@@ -21,7 +21,7 @@ from optuna.samplers import TPESampler
 from fraudetect import import_from_path
 from ..config import Arguments
 from ..dataset import load_data
-from ..preprocessing import load_workflow
+from ..preprocessing import load_workflow, get_feature_selector
 from ..detectors import get_detector, instantiate_detector
 
 
@@ -366,18 +366,14 @@ class Tuner(object):
             )
             pyod_choices = json.loads(pyod_choices)
             detector_list = []
-            for name in self.pyod_detectors:
+            for det_name in self.pyod_detectors:
                 cfg = self.sample_cfg_optuna(
-                    trial, name, self.HYP_CONFIGS.outliers_detectors[name]
+                    trial, det_name, self.HYP_CONFIGS.outliers_detectors[det_name]
                 )
-                detector, _cfg = get_detector(name=name, config={name:cfg})
-                detector = instantiate_detector(detector, _cfg)
+                detector, cfg = get_detector(name=det_name, config={det_name:cfg})
+                detector = instantiate_detector(detector, cfg)
                 detector_list.append(detector)
-                
-            #     if name in pyod_choices:
-            #         cfgs.append(_cfg)
-            # outliers_det_configs = OrderedDict(zip(pyod_choices, cfgs))
-            
+        
         # select samplers
         # sampler_cfgs, sampler_names = None, None
         # if not trial.suggest_categorical(
@@ -401,31 +397,42 @@ class Tuner(object):
         # )
 
         # feature selector:
-        do_feature_selection =  trial.suggest_categorical(
-            "select_features", [True, self.args.do_feature_selection])
+        do_feature_selection =  trial.suggest_categorical("select_features", 
+                                                          [False, self.args.do_feature_selection])
+        selector_cfg = {}
+        feature_selector_name = None
         if do_feature_selection:
             feature_selector_name = trial.suggest_categorical(
-                "feature_selector_name", [])
+                "feature_selector_name", self.HYP_CONFIGS.feature_selector.keys())
+            selector_cfg = self.sample_cfg_optuna(
+                trial, feature_selector_name, self.HYP_CONFIGS.feature_selector[feature_selector_name]
+            )
+            _, selector_cfg = get_feature_selector(name=feature_selector_name,config={feature_selector_name:selector_cfg})
+                      
         
-        rfe_estimator = DecisionTreeClassifier(max_depth=15,
+        feature_select_estimator = DecisionTreeClassifier(max_depth=15,
                                            max_features='sqrt',
                                            random_state=41)
         
         data_processor = load_workflow(
                           cols_to_drop=self.args.cols_to_drop,
-                          rfe_estimator=rfe_estimator,
+                          scoring=selector_cfg.get('scoring','f1'),
+                          feature_select_estimator=feature_select_estimator,
+                          rfe_step=selector_cfg.get('step',3),
                           pca_n_components=20,
                           detector_list=detector_list,
                           cv_gap=self.args.cv_gap,
                           n_splits=self.args.n_splits,
                           session_gap_minutes=self.args.session_gap_minutes,
-                          uid_cols=[None,],
-                          feature_selector_name="selectkbest",
+                          uid_cols=self.args.concat_features,
+                          feature_selector_name=feature_selector_name,
+                          seq_n_features_to_select=selector_cfg.get('n_features_to_select',3),
                           windows_size_in_days=self.args.windows_size_in_days,
                           cat_encoding_method=self.args.cat_encoding_method,
                           imputer_n_neighbors=9,
                           n_clusters=8,
-                          top_k_best=10,
+                          top_k_best=selector_cfg.get('k',10),
+                          # k_score_func=selector_cfg.get('score_func',10),
                           do_pca=do_pca,
                           verbose=self.verbose,
                           n_jobs=self.args.n_jobs

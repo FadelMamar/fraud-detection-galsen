@@ -3,8 +3,8 @@ from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import LinearSVC, SVC
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.feature_selection import RFECV, SequentialFeatureSelector, SelectKBest, f_classif, mutual_info_classif
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.feature_selection import RFECV, SequentialFeatureSelector, SelectKBest#, f_classif, mutual_info_classif
+# from sklearn.model_selection import TimeSeriesSplit
 from sklearn.ensemble import (
     RandomForestClassifier,
     GradientBoostingClassifier,
@@ -542,34 +542,26 @@ models["xgboost"] = dict(
 #                               )
 #%% feature selector
 feature_selector = dict()
-feature_select_estimator=[DecisionTreeClassifier(), RandomForestClassifier()]
+# feature_select_estimator=['decisionTree','balancedRandomForest']
 scoring=['f1',]
-cv=TimeSeriesSplit(n_splits=5,gap=5000)
+# cv=TimeSeriesSplit(n_splits=5,gap=5000)
 feature_selector["rfecv"] = dict(selector=RFECV,
                                  scoring=scoring,
-                                 estimator=feature_select_estimator,
+                                 # estimator=feature_select_estimator,
                                  step=list(range(1,10)),
-                                 cv=[cv,]
+                                 # cv=[cv,]
                                  )
 
 
 feature_selector["sequential"] = dict(selector=SequentialFeatureSelector,
-                                      estimator=feature_select_estimator,
+                                      # estimator=feature_select_estimator,
                                       n_features_to_select=list(range(1,10)),
-                                      direction=["forward",],
                                       scoring=scoring,
-                                      n_jobs=[4,],
                                       tol=[1e-4],
-                                      cv=[cv,]
+                                      # cv=[cv,]
 )   
 
 feature_selector["selectkbest"] = dict(selector=SelectKBest,
-                                      score_func=[f_classif,mutual_info_classif],
-                                      n_features_to_select=list(range(1,10)),
+                                      # score_func=['f_classif','mutual_info_classif'],
                                       k=[10,20,30],
-                                      direction=["forward",],
-                                      scoring=scoring,
-                                      n_jobs=[4,],
-                                      tol=[1e-4],
-                                      cv=[cv,]
 )
