@@ -16,7 +16,7 @@ from category_encoders import (
 )
 
 from sklearn.utils._param_validation import Interval
-from sklearn.compose import ColumnTransformer
+from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, SplineTransformer
 from sklearn.model_selection import TimeSeriesSplit
@@ -473,7 +473,8 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         "imputer_n_neighbors":[int],
         "onehot_threshold":[int],
         "cat_encoding_method":[str],
-        "n_jobs":[int]
+        "n_jobs":[int],
+        'cat_encoding_kwargs':[dict]
     }
 
     def __init__(
@@ -483,36 +484,72 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         imputer_n_neighbors:int=5,
         onehot_threshold: int = 9,
         n_jobs: int = 1,
+        cat_encoding_kwargs={}
     ):
 
         self.add_imputer = add_imputer
         self.imputer_n_neighbors = imputer_n_neighbors
 
         self.cat_encoding_method = cat_encoding_method
+        self.cat_encoding_kwargs = cat_encoding_kwargs
 
         self.onehot_threshold = onehot_threshold
 
         self.n_jobs = n_jobs
 
-        self._columns_of_transformed_data = None
+        self.get_feature_names_out = None
     
     def check_dataframe(self,X:pd.DataFrame):
         
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
         assert X.isna().sum().sum() < 1, "Found NaN values"
+        
+    def load_cols_transformer(self,df:pd.DataFrame):
+        
+        # scalers
+        scaler = StandardScaler()
+        onehot_encoder = OneHotEncoder(handle_unknown='ignore')
+        
+        # numeric columns
+        numeric_cols = df.select_dtypes(include=["number"]).columns
+        # numeric_cols = [col for col in numeric_cols]
+        # numeric_cols = make_column_selector(pattern='',dtype_include=['number'])
+        transformers = [("scaled", scaler, numeric_cols)]
+
+        # categorical columns
+        if str(self.cat_encoding_method) == 'None':
+            print('Categorical columns will not be encoded by ColumnTransformer.')
+
+        else:
+            cols = df.select_dtypes(include=["object", "string","category"]).columns
+            cols_onehot = [col for col in cols if df[col].nunique() < self.onehot_threshold]
+            cols_cat_encode = [
+                col for col in cols if df[col].nunique() >= self.onehot_threshold
+            ]
+            cat_encoder = load_cat_encoding(
+                cat_encoding_method=self.cat_encoding_method, 
+                **self.cat_encoding_kwargs
+            )
+            transformers = transformers + [
+                    ("onehot", onehot_encoder, cols_onehot),
+                    ("cat_encode", cat_encoder, cols_cat_encode),
+                ]
+                
+        col_transformer = ColumnTransformer(
+            transformers, 
+            remainder="passthrough", 
+            n_jobs=self.n_jobs, 
+            verbose=False
+        )
+
+        return col_transformer 
 
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X: pd.DataFrame, y=None,**fit_params):
 
         self.check_dataframe(X)
 
-        self._col_transformer = load_cols_transformer(df=X,
-                                                    onehot_threshold=self.onehot_threshold,
-                                                    n_jobs=self.n_jobs,
-                                                    scaler = StandardScaler(),
-                                                    onehot_encoder = OneHotEncoder(handle_unknown='ignore'),
-                                                    cat_encoding_method=self.cat_encoding_method,
-                                                    **fit_params)
+        self._col_transformer = self.load_cols_transformer(df=X)
         self._imputer = None
         if self.add_imputer:
             self._imputer = KNNImputer(n_neighbors=self.imputer_n_neighbors,
@@ -527,7 +564,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         self.n_features_in_ = len(self.feature_names_in_)
         self.is_fitted_ = True
 
-        self._columns_of_transformed_data = self._col_transformer.get_feature_names_out()
+        self.get_feature_names_out = list(self._col_transformer.get_feature_names_out())
 
         return self
 
@@ -539,7 +576,13 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         
         if self._imputer is not None:
             X = self._imputer.fit_transform(X=X,y=y)
-                
+            
+        X = pd.DataFrame(data=X,columns=self.get_feature_names_out).convert_dtypes()
+        
+        cat_cols = X.select_dtypes(include=["object", "string","category"]).columns
+        for col in cat_cols:
+            X[col] = X[col].astype('category')
+        
         return X
 
     def fit_transform(self, X, y = None, **fit_params):
@@ -735,8 +778,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         X.drop(columns=['TX_DATETIME'],inplace=True)
 
         return X
-
-
 
     def _compute_clusters_customers(self, df) -> None:
         # -- Compute clusters
@@ -1067,7 +1108,9 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                 continue
         
         seasonal_df = pd.DataFrame(features)
-        df = df.merge(seasonal_df, on=group_key, how='left') #.fillna(0)       
+        df = df.merge(seasonal_df, on=group_key, how='left')
+        nan_mask = df[list(seasonal_df.columns)].isna()
+        df[nan_mask]  = 0
 
         return df
 
@@ -1099,7 +1142,9 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             features.append(fft_dict)
         
         fft_df = pd.DataFrame(features)
-        df = df.merge(fft_df, on=group_key, how='left') #.fillna(0)
+        df = df.merge(fft_df, on=group_key, how='left')
+        nan_mask = df[list(fft_df.columns)].isna()
+        df[nan_mask]  = 0
 
         return df
 
@@ -1159,18 +1204,7 @@ def load_workflow(cols_to_drop,
                   verbose=False,
                   n_jobs=2):
     
-    
-    dropper = ColumnDropper(cols_to_drop=cols_to_drop)
-
-
-    encoder = FeatureEncoding(add_imputer=add_imputer,
-                                cat_encoding_method=str(cat_encoding_method),
-                                imputer_n_neighbors=imputer_n_neighbors,
-                                n_jobs=n_jobs,
-                                onehot_threshold=onehot_threshold,
-                                )
-    
-   
+   # preliminary feature expansion
     feature_engineer = FraudFeatureEngineer(windows_size_in_days=windows_size_in_days,
                                              uid_cols=uid_cols,
                                              add_fraud_rate_features=add_fraud_rate_features,
@@ -1189,6 +1223,17 @@ def load_workflow(cols_to_drop,
                                              cluster_on_feature=cluster_on_feature,
                                              uid_col_name="CustomerUID", # name given to uid cols created from interactions of uid_cols
                                             )
+    
+    # drop columns
+    dropper = ColumnDropper(cols_to_drop=cols_to_drop)
+
+    # encodes features and impute missing values
+    encoder = FeatureEncoding(add_imputer=add_imputer,
+                                cat_encoding_method=str(cat_encoding_method),
+                                imputer_n_neighbors=imputer_n_neighbors,
+                                n_jobs=n_jobs,
+                                onehot_threshold=onehot_threshold,
+                                )
     
     # get advanced features -> PCA, feature selection + outliers scores
     advanced_features = []
