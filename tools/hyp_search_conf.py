@@ -4,7 +4,12 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.svm import LinearSVC, SVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.feature_selection import RFECV, SequentialFeatureSelector, SelectKBest#, f_classif, mutual_info_classif
+from sklearn.feature_selection import (
+    RFECV,
+    SequentialFeatureSelector,
+    SelectKBest,
+)  # , f_classif, mutual_info_classif
+
 # from sklearn.model_selection import TimeSeriesSplit
 from sklearn.ensemble import (
     RandomForestClassifier,
@@ -13,7 +18,7 @@ from sklearn.ensemble import (
     BaggingClassifier,
     VotingClassifier,
     AdaBoostClassifier,
-    StackingClassifier
+    StackingClassifier,
 )
 from catboost import CatBoostClassifier
 from xgboost import XGBClassifier
@@ -419,7 +424,9 @@ models["randomForest"] = dict(
         "sqrt",
         "log2",
     ],
-    random_state=[None,],
+    random_state=[
+        None,
+    ],
     model=RandomForestClassifier,
 )
 
@@ -443,7 +450,7 @@ models["gradientBoosting"] = dict(
     n_estimators=n_estimators,
     learning_rate=learning_rate,
     subsample=[0.75, 0.85, 1.0],
-    criterion=["friedman_mse",'squared_error'],
+    criterion=["friedman_mse", "squared_error"],
     max_depth=[
         5,
         10,
@@ -459,7 +466,9 @@ models["gradientBoosting"] = dict(
 
 # -> handles missig values
 models["histGradientBoosting"] = dict(
-    loss=["log_loss",],
+    loss=[
+        "log_loss",
+    ],
     max_iter=[100, 500, 1000, 10000],
     learning_rate=learning_rate,
     max_depth=[
@@ -468,13 +477,21 @@ models["histGradientBoosting"] = dict(
         15,
     ],
     l2_regularization=C,
-    categorical_features=["from_dtype",],
-    random_state=[None,],
-    max_bins=[255,],
+    categorical_features=[
+        "from_dtype",
+    ],
+    random_state=[
+        None,
+    ],
+    max_bins=[
+        255,
+    ],
     class_weight=[
         "balanced",
     ],
-    n_iter_no_change=[10,],
+    n_iter_no_change=[
+        10,
+    ],
     tol=[1e-7],
     model=HistGradientBoostingClassifier,
 )
@@ -491,75 +508,107 @@ models["xgboost"] = dict(
     objective=["binary:hinge", "binary:logistic"],
     scale_pos_weight=[1.0, 5.62, 31.62, 177.83, 1000.0],
     subsample=[0.85, 1.0],
-    max_bin=[255,],
+    max_bin=[
+        255,
+    ],
     colsample_bytree=[0.85, 1.0],
-    gamma=[0.0,],
-    reg_lambda=[1.0,],
-    reg_alpha=[0.0,],
-    eval_metric=["f1",],
-    importance_type=["gain",],
-    random_state=[None,],
+    gamma=[
+        0.0,
+    ],
+    reg_lambda=[
+        1.0,
+    ],
+    reg_alpha=[
+        0.0,
+    ],
+    eval_metric=[
+        "f1",
+    ],
+    importance_type=[
+        "gain",
+    ],
+    random_state=[
+        None,
+    ],
     enable_categorical=[
         True,
     ],
-    max_cat_to_onehot=[9,],
+    max_cat_to_onehot=[
+        9,
+    ],
     model=XGBClassifier,
 )
 
-models['catboost'] = dict(iterations=[None, 100],
-                          model=CatBoostClassifier
-                          )
+models["catboost"] = dict(iterations=[None, 100], model=CatBoostClassifier)
 
-models['lgbm'] = dict(iterations=[None, 100],
-                      n_estimators=n_estimators,
-                      objective=['binary',],
-                      class_weight = ['balanced',None],
-                    model=LGBMClassifier
-                    )
+models["lgbm"] = dict(
+    iterations=[None, 100],
+    n_estimators=n_estimators,
+    objective=[
+        "binary",
+    ],
+    class_weight=["balanced", None],
+    model=LGBMClassifier,
+)
 
 # TODO: For the models below, try only after optimizing the previous models
-models['baggingClassifier'] = dict(estimator=[HistGradientBoostingClassifier(),
-                                            ],
-                                   n_estimators=n_estimators,
-                                   max_samples=np.linspace(0.3,0.9,num=10).tolist(),
-                                   max_features=np.linspace(0.3,0.9,num=10).tolist(),
-                                #    bootstrap=[True, False],
-                                #    bootstrap_features=[True, False],
-                                   model=BaggingClassifier,
-                                )
+models["baggingClassifier"] = dict(
+    estimator=[
+        HistGradientBoostingClassifier(),
+    ],
+    n_estimators=n_estimators,
+    max_samples=np.linspace(0.3, 0.9, num=10).tolist(),
+    max_features=np.linspace(0.3, 0.9, num=10).tolist(),
+    #    bootstrap=[True, False],
+    #    bootstrap_features=[True, False],
+    model=BaggingClassifier,
+)
 
-models['votingClassifier'] = dict(estimators=[HistGradientBoostingClassifier(),
-                                              CatBoostClassifier(),
-                                              LGBMClassifier(),
-                                            ],
-                                   voting=['soft',],
-                                   model=VotingClassifier,
-                                )
+models["votingClassifier"] = dict(
+    estimators=[
+        HistGradientBoostingClassifier(),
+        CatBoostClassifier(),
+        LGBMClassifier(),
+    ],
+    voting=[
+        "soft",
+    ],
+    model=VotingClassifier,
+)
 
-models['adaBoostClassifier'] = dict(estimator=[RandomForestClassifier(),
-                                              DecisionTreeClassifier(),
-                                              LogisticRegression(),
-                                              ],
-                         n_estimators=n_estimators,
-                         learning_rate=np.logspace(-4, -1, 10).tolist(),
-                         model=AdaBoostClassifier,
-                        )
+models["adaBoostClassifier"] = dict(
+    estimator=[
+        RandomForestClassifier(),
+        DecisionTreeClassifier(),
+        LogisticRegression(),
+    ],
+    n_estimators=n_estimators,
+    learning_rate=np.logspace(-4, -1, 10).tolist(),
+    model=AdaBoostClassifier,
+)
 
-models['stackingClassifier'] = dict(estimators=[[HistGradientBoostingClassifier(),
-                                                CatBoostClassifier(),
-                                                LGBMClassifier()
-                                                ],
-                                            ],
-                                 final_estimator=[LogisticRegression(),SVC()],
-                                 cv=[TimeSeriesSplit(n_splits=5, gap=5000),],
-                                 passthrough=[False,],
-                                 stack_method=['auto',],
-                                 model=StackingClassifier,
-                              )
-#%% feature selector
+models["stackingClassifier"] = dict(
+    estimators=[
+        [HistGradientBoostingClassifier(), CatBoostClassifier(), LGBMClassifier()],
+    ],
+    final_estimator=[LogisticRegression(), SVC()],
+    cv=[
+        TimeSeriesSplit(n_splits=5, gap=5000),
+    ],
+    passthrough=[
+        False,
+    ],
+    stack_method=[
+        "auto",
+    ],
+    model=StackingClassifier,
+)
+# %% feature selector
 feature_selector = dict()
 # feature_select_estimator=['decisionTree','balancedRandomForest']
-scoring=['f1',]
+scoring = [
+    "f1",
+]
 # cv=TimeSeriesSplit(n_splits=5,gap=5000)
 # feature_selector["rfecv"] = dict(selector=RFECV,
 #                                  scoring=scoring,
@@ -575,9 +624,10 @@ scoring=['f1',]
 #                                       scoring=scoring,
 #                                       tol=[1e-4],
 #                                       # cv=[cv,]
-# )   
+# )
 
-feature_selector["selectkbest"] = dict(selector=SelectKBest,
-                                      # score_func=['f_classif','mutual_info_classif'],
-                                      k=[10,20,30],
+feature_selector["selectkbest"] = dict(
+    selector=SelectKBest,
+    # score_func=['f_classif','mutual_info_classif'],
+    k=np.linspace(10,80,num=50).round().astype(int).tolist(),
 )

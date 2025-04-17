@@ -34,7 +34,6 @@ def load_data(data_path: str = "../data/training.csv") -> pd.DataFrame:
             inplace=True,
         )
         df_data["TX_FRAUD"] = df_data["TX_FRAUD"].astype("UInt8")
-    
 
     # necessary for splitting
     df_data["TX_TIME_DAYS"] = (

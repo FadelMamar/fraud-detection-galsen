@@ -231,18 +231,20 @@ COLUMNS_TO_DROP = [
 # X_pred,y_pred= encoder.transform(X=df_pred)
 
 
-#%% Preprocessing pipeline
+# %% Preprocessing pipeline
 from pathlib import Path
 from fraudetect.dataset import load_data
 from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
-from fraudetect.preprocessing.preprocessing import (load_cols_transformer,
-                                                    fit_outliers_detectors,
-                                                    ColumnDropper, 
-                                                    load_workflow,
-                                                    Pipeline, 
-                                                    FeatureUnion,
-                                                    OutlierDetector,
-                                                    AdvancedFeatures)
+from fraudetect.preprocessing.preprocessing import (
+    load_cols_transformer,
+    fit_outliers_detectors,
+    ColumnDropper,
+    load_workflow,
+    Pipeline,
+    FeatureUnion,
+    OutlierDetector,
+    AdvancedFeatures,
+)
 from fraudetect import import_from_path, sample_cfg
 
 from fraudetect.modeling.utils import get_model, sample_model_cfg, instantiate_model
@@ -255,12 +257,11 @@ from shutil import rmtree
 from joblib import Memory
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import TimeSeriesSplit
+from collections.abc import Iterable
 
 CURDIR = Path(__file__).parent
 cfg_path = CURDIR / "hyp_search_conf.py"
-CONFIGS = import_from_path(
-    "hyp_search_conf", cfg_path
-)
+CONFIGS = import_from_path("hyp_search_conf", cfg_path)
 
 raw_data_train = load_data(CURDIR / "../data/training.csv")
 
@@ -280,13 +281,9 @@ COLUMNS_TO_DROP = [
 ]
 
 
-
-y_train = raw_data_train['TX_FRAUD']
+y_train = raw_data_train["TX_FRAUD"]
 
 # dropper = ColumnDropper(cols_to_drop=COLUMNS_TO_DROP)
-
-
-
 
 
 # v2
@@ -347,9 +344,7 @@ for name in names:
 
 
 # Feature selection
-estimator = DecisionTreeClassifier(max_depth=15,
-                                   max_features='sqrt',
-                                   random_state=41)
+estimator = DecisionTreeClassifier(max_depth=15, max_features="sqrt", random_state=41)
 
 # feature_selector = AdvancedFeatures(verbose=True,
 #                                     estimator=estimator,
@@ -366,7 +361,7 @@ estimator = DecisionTreeClassifier(max_depth=15,
 # X_pyod = concatenator.fit_transform(X=X_train,y=y_train)
 
 # load model
-model, model_cfgs = get_model('logisticReg', CONFIGS.models)
+model, model_cfgs = get_model("histGradientBoosting", CONFIGS.models)
 model_cfg = sample_model_cfg(model_cfgs)
 model = instantiate_model(model, **model_cfg)
 
@@ -392,34 +387,37 @@ model = instantiate_model(model, **model_cfg)
 # Delete the temporary cache before exiting
 # memory.clear(warn=False)
 # rmtree(location)
- 
 
-data_processor = load_workflow(cols_to_drop=COLUMNS_TO_DROP,
-                  feature_select_estimator=estimator,
-                  pca_n_components=20,
-                  detector_list=None, #model_list,
-                  session_gap_minutes=60*3,
-                  uid_cols=[None,],
-                  add_imputer=False,
-                  feature_selector_name=None,#"selectkbest",
-                  windows_size_in_days=[1,7,30],
-                  cat_encoding_method='binary', # TODO
-                  imputer_n_neighbors=9,
-                  n_clusters=8,
-                  top_k_best=10,
-                  do_pca=False,
-                  verbose=True,
-                  n_jobs=1,
-                  add_fft=False, # TODO
-                add_seasonal_features=True, # TODO
-                use_nystrom=False,
-                nystroem_components=50,
-                nystroem_kernel='poly',
-                use_sincos=False,
-                use_spline=False, 
-                spline_degree=3,
-                spline_n_knots=6,
-                )
+
+data_processor = load_workflow(
+    cols_to_drop=COLUMNS_TO_DROP,
+    feature_select_estimator=estimator,
+    pca_n_components=80,
+    detector_list=None,  # model_list,
+    session_gap_minutes=60 * 3,
+    uid_cols=[
+        None,
+    ],
+    add_imputer=False,
+    feature_selector_name=None,  # "selectkbest",
+    windows_size_in_days=[1, 7, 30],
+    cat_encoding_method=None,  # TODO try None
+    imputer_n_neighbors=9,
+    n_clusters=8,
+    top_k_best=10,
+    do_pca=False,
+    verbose=True,
+    n_jobs=1,
+    add_fft=True,
+    add_seasonal_features=True,
+    use_nystrom=True,
+    nystroem_components=50,
+    nystroem_kernel="poly",
+    use_sincos=True,
+    use_spline=True,
+    spline_degree=3,
+    spline_n_knots=6,
+)
 
 # data_processor = load_workflow(
 #                           cols_to_drop=self.args.cols_to_drop,
@@ -445,24 +443,27 @@ data_processor = load_workflow(cols_to_drop=COLUMNS_TO_DROP,
 #                           n_jobs=self.args.n_jobs
 #                           )
 
-y_train = raw_data_train['TX_FRAUD']
-X_train = data_processor.fit_transform(X=raw_data_train, y=y_train) #.score(X=raw_data_train,y=y_train)
-X_pred = data_processor.transform(raw_data_pred)
+# y_train = raw_data_train['TX_FRAUD']
+# X_train = data_processor.fit_transform(X=raw_data_train, y=y_train) #.score(X=raw_data_train,y=y_train)
+# X_pred = data_processor.transform(raw_data_pred)
 
-print('X_train.shape: ',X_train.shape)
-print('X_pred.shape: ',X_pred.shape)
+# print('X_train.shape: ',X_train.shape)
+# print('X_pred.shape: ',X_pred.shape)
 
-print('Num NaN train', (X_train==np.nan).sum())
-
-
+# print('Num NaN train', (X_train==np.nan).sum())
 
 
+model = model.set_params(categorical_features="from_dtype")
 
-# classifier = Pipeline(steps=[('data_processor',data_processor),
-#                        ('model',model)]
-#                       )
+classifier = Pipeline(steps=[("data_processor", data_processor), ("model", model)])
 
-# params_config = {f"model__{k}":v for k,v in model_cfgs.items()}
+# classifier = classifier.set_params(model__categorical_features='from_dtype')
+
+# classifier.fit(raw_data_train, y=y_train)
+# score = classifier.score(X=raw_data_train,y=y_train)
+
+
+# params_config = {f"model__{k}":v for k,v in model_cfgs.items() if len(v)>1 and isinstance(v, Iterable)}
 
 # search_engine = RandomizedSearchCV(
 #     classifier,
@@ -471,13 +472,49 @@ print('Num NaN train', (X_train==np.nan).sum())
 #     cv=TimeSeriesSplit(n_splits=5,gap=5000),
 #     refit=True,
 #     n_jobs=1,
-#     n_iter=20,
+#     n_iter=2,
 #     random_state=41,
 #     verbose=True,
 # )
 
-# search_engine.fit(X=raw_data_train, y=y_train)
+import optuna
+from optuna.samplers import TPESampler
+from collections.abc import Iterable
+
+study = optuna.create_study(
+    direction="maximize",
+    sampler=TPESampler(multivariate=True, group=True),
+    load_if_exists=True,
+)
+
+cfg = dict()
+params_config = {
+    f"model__{k}": v
+    for k, v in model_cfgs.items()
+    if len(v) > 1 and isinstance(v, Iterable)
+}
+for k, v in params_config.items():
+    if isinstance(v, Iterable):
+        cfg[k] = optuna.distributions.CategoricalDistribution(v)
+    else:
+        cfg[k] = optuna.distributions.CategoricalDistribution([v, v])
+
+search_engine = optuna.integration.OptunaSearchCV(
+    classifier,
+    param_distributions=cfg,
+    cv=TimeSeriesSplit(n_splits=5, gap=5000),
+    refit=True,
+    n_jobs=1,
+    study=study,
+    scoring="f1",
+    error_score="raise",
+    max_iter=300,
+    timeout=60 * 3,
+    n_trials=5,
+    # random_state=41,
+    verbose=True,
+)
+
+search_engine.fit(X=raw_data_train, y=y_train)
 
 # print(search_engine.best_estimator_)
-
-

@@ -60,30 +60,38 @@ class Arguments:
         "randomForest",
         "histGradientBoosting",
     )
-    session_gap_minutes:int=30
-    onehot_threshold:int=9
+    session_gap_minutes: int = 30
+    onehot_threshold: int = 9
     pyod_detectors: Sequence = ("iforest", "cblof", "loda", "knn")
     disable_pyod_outliers: bool = False
     disable_samplers: bool = False
     do_pca: bool = False  #  try pca
-    do_poly_expansion: bool = False
-    do_feature_selection:bool = False
+    do_poly_expansion: bool = False # not used. does do anything
+    do_feature_selection: bool = False
     cv_n_iter: int = 20  # for cross validation
     cv_gap: int = 1051 * 5
     cv_method: str = "optuna"
     n_splits: int = 5
     n_jobs: int = 8
     scoring: str = "f1"
-    cat_encoding_method: str = "binary"  # count, binary, base_n, hashing
+    cat_encoding_method: str = "binary"  # count, binary, base_n, hashing, 'None'
     cat_encoding_base_n: int = 4
     cat_encoding_hash_method: str = "md5"
     cat_encoding_hash_n_components: int = 8
     add_imputer: bool = False
-    concat_features: Sequence = (None,) #("AccountId", "CUSTOMER_ID")  # or None to disable
+    concat_features: Sequence = (
+        None,
+    )  # ("AccountId", "CUSTOMER_ID")  # or None to disable
     concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )
     optuna_n_trials: int = 50
+
+    add_fft:bool=False
+    add_seasonal_features:bool=False
+    use_nystrom:bool=False
+    use_sincos:bool=False
+    use_spline:bool=False
 
     cols_to_drop: Sequence[str] = None
     # training parameters

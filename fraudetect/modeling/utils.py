@@ -30,6 +30,7 @@ from ..detectors import get_detector, instantiate_detector
 # except:
 #     import pandas as pd
 
+
 def evaluate(classifier, X, y):
     metrics = ["accuracy", "f1", "average_precision", "precision", "recall"]
     for metric in metrics:
@@ -226,72 +227,76 @@ def _tune_models_hyp(
         print(f"mean {scoring} score for best_estimator: {score:.4f}")
         # print("best params: ", search_engine.best_params_)
 
-    return search_engine # {model_name: search_engine}  #
+    return search_engine  # {model_name: search_engine}  #
 
 
 def _run(
     args: Arguments,
     classifier,
-    params_config,
+    params_config: dict,
     X_train,
     y_train,
     save_path: str = None,
     verbose=0,
 ) -> BaseSearchCV:
-    # if np.any(np.isnan(X_train)):
-    #     raise ValueError("There are NaN values in X_train.")
+    assert isinstance(args.scoring, str), "It should be a string."
 
-    # assert len(models_config) == 1, "Provide only one model in models_config"
+    cv = TimeSeriesSplit(n_splits=args.n_splits, gap=args.cv_gap)
 
-    # tune models
-    best_results = _tune_models_hyp(
+    search_engine = hyperparameter_tuning(
+        cv=cv,
+        params_config=params_config,
         X_train=X_train,
         y_train=y_train,
-        classifier=classifier,
-        params_config=params_config,
-        n_splits=args.n_splits,
-        gap=args.cv_gap,
-        n_iter=args.cv_n_iter,
+        model=classifier,
         scoring=args.scoring,
+        method=args.cv_method,  # other, gridsearch
         verbose=verbose,
+        n_iter=args.cv_n_iter,
         n_jobs=args.n_jobs,
-        method=args.cv_method,
     )
+
+    if verbose:
+        score = search_engine.best_score_
+        print(f"mean {args.scoring} score for best_estimator: {score:.4f}")
+        # print("best params: ", search_engine.best_params_)
 
     # save results
     if save_path:
-        joblib.dump(best_results, save_path)
+        joblib.dump(search_engine, save_path)
 
-    return best_results
+    return search_engine
 
 
 class Tuner(object):
     def __init__(
-        self, args: Arguments, 
-        verbose: int = 0, 
+        self,
+        args: Arguments,
+        verbose: int = 0,
         cat_encoding_kwards: dict = {},
-        feature_selector_kwargs:dict={}
+        feature_selector_kwargs: dict = {},
     ):
         self.HYP_CONFIGS = None
 
         self.args = deepcopy(args)
         self.pyod_detectors = deepcopy(sorted(self.args.pyod_detectors))
         self.pyod_choices = [
-            json.dumps(list(k)) for k in combinations(self.pyod_detectors, min(4,len(args.pyod_detectors)))
+            json.dumps(list(k))
+            for k in combinations(self.pyod_detectors, min(4, len(args.pyod_detectors)))
         ]
         self.model_names = deepcopy(args.model_names)
         self.disable_pyod = deepcopy(args.disable_pyod_outliers)
         self.disable_samplers = deepcopy(args.disable_samplers)
         self.verbose = verbose
         self.count_iter = 0
-        self.feature_selector_kwargs= feature_selector_kwargs
-        self.cat_encoding_kwards=cat_encoding_kwards
+        self.feature_selector_kwargs = feature_selector_kwargs
+        self.cat_encoding_kwards = cat_encoding_kwards
         self.selector = None
-                
+
         self.raw_data_train = load_data(args.data_path)
         # self.X_train = raw_data_train #.drop(columns=['TX_FRAUD'])
-        self.y_train = self.raw_data_train['TX_FRAUD']
-               
+        self.y_train = self.raw_data_train["TX_FRAUD"]
+
         self.best_score = 0.0
         self.best_records = dict()
         self.ckpt_filename = os.path.join(
@@ -308,12 +313,14 @@ class Tuner(object):
 
         return _cfg
 
-    def save_checkpoint(self,model_name:str, score: float, results: BaseSearchCV):
+    def save_checkpoint(self, model_name: str, score: float, results: BaseSearchCV):
         if score >= self.best_score:
             self.best_score = score
-            vals = [results,]
+            vals = [
+                results,
+            ]
             joblib.dump(vals, self.ckpt_filename)
-            self.best_records[model_name]=results
+            self.best_records[model_name] = results
 
     def load_hyp_conf(self, path_conf: str):
         try:
@@ -326,7 +333,7 @@ class Tuner(object):
 
         self.transform_pipeline = None
         self.selector = None
-    
+
         # select model
         model_name = trial.suggest_categorical(
             "classifier",
@@ -334,16 +341,16 @@ class Tuner(object):
         )
         models_config = {model_name: self.HYP_CONFIGS.models[model_name]}
         model, models_config = get_model(model_name, self.HYP_CONFIGS.models)
-        model = instantiate_model(model,**sample_model_cfg(models_config)) # instantiate with        
-                
+        model = instantiate_model(
+            model, **sample_model_cfg(models_config)
+        )  # instantiate with
+
         # PCA
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
         pca_n_components = None
         if do_pca:
-            pca_n_components = trial.suggest_int(
-                "n_components", 5, 50, 5
-            )
-                   
+            pca_n_components = trial.suggest_int("n_components", 5, 50, 5)
+
         # select outlier detector for data aug
         disable_pyod = trial.suggest_categorical(
             "disable_pyod", [True, self.disable_pyod]
@@ -363,65 +370,83 @@ class Tuner(object):
                 cfg = self.sample_cfg_optuna(
                     trial, det_name, self.HYP_CONFIGS.outliers_detectors[det_name]
                 )
-                detector, cfg = get_detector(name=det_name, config={det_name:cfg})
+                detector, cfg = get_detector(name=det_name, config={det_name: cfg})
                 detector = instantiate_detector(detector, cfg)
                 detector_list.append(detector)
-        
-        
 
         # feature selector:
-        do_feature_selection =  trial.suggest_categorical("select_features", 
-                                                          [False, self.args.do_feature_selection])
+        do_feature_selection = trial.suggest_categorical(
+            "select_features", [False, self.args.do_feature_selection]
+        )
         selector_cfg = {}
         feature_selector_name = None
         if do_feature_selection:
             feature_selector_name = trial.suggest_categorical(
-                "feature_selector_name", self.HYP_CONFIGS.feature_selector.keys())
-            selector_cfg = self.sample_cfg_optuna(
-                trial, feature_selector_name, self.HYP_CONFIGS.feature_selector[feature_selector_name]
+                "feature_selector_name", self.HYP_CONFIGS.feature_selector.keys()
             )
-            _, selector_cfg = get_feature_selector(name=feature_selector_name,config={feature_selector_name:selector_cfg})
-                      
+            selector_cfg = self.sample_cfg_optuna(
+                trial,
+                feature_selector_name,
+                self.HYP_CONFIGS.feature_selector[feature_selector_name],
+            )
+            _, selector_cfg = get_feature_selector(
+                name=feature_selector_name, config={feature_selector_name: selector_cfg}
+            )
         
-        feature_select_estimator = DecisionTreeClassifier(max_depth=15,
-                                           max_features='sqrt',
-                                           random_state=41)
-        
+        # advanced features
+        advanced_transformation = dict(add_fft=self.args.add_fft,
+                add_seasonal_features=self.args.add_seasonal_features,
+                use_nystrom=self.args.use_nystrom,
+                use_sincos=self.args.use_sincos,
+                use_spline=self.args.use_spline,
+        )
+        for k,v in advanced_transformation.items():
+            advanced_transformation[k] = trial.suggest_categorical(
+                                        k, [False, v],
+                                    )
+
+        feature_select_estimator = DecisionTreeClassifier(
+            max_depth=15, max_features="sqrt", random_state=41
+        )
+
         data_processor = load_workflow(
-                          cols_to_drop=self.args.cols_to_drop,
-                          scoring=selector_cfg.get('scoring','f1'),
-                          feature_select_estimator=feature_select_estimator,
-                          rfe_step=selector_cfg.get('step',3),
-                          pca_n_components=pca_n_components or 20,
-                          detector_list=detector_list,
-                          cv_gap=self.args.cv_gap,
-                          n_splits=self.args.n_splits,
-                          session_gap_minutes=self.args.session_gap_minutes,
-                          uid_cols=self.args.concat_features,
-                          feature_selector_name=feature_selector_name,
-                          seq_n_features_to_select=selector_cfg.get('n_features_to_select',3),
-                          windows_size_in_days=self.args.windows_size_in_days,
-                          cat_encoding_method=self.args.cat_encoding_method,
-                          imputer_n_neighbors=9,
-                          n_clusters=8,
-                          top_k_best=selector_cfg.get('k',10),
-                          # k_score_func=selector_cfg.get('score_func',10),
-                          do_pca=do_pca,
-                          verbose=self.verbose,
-                          n_jobs=1 #self.args.n_jobs
-                          )
-        
-        if model_name == 'histGradientBoosting':
-            model.set_params(categorical_features='from_dtype')
-        elif model_name == 'catboost':
+            cols_to_drop=self.args.cols_to_drop,
+            scoring=selector_cfg.get("scoring", "f1"),
+            feature_select_estimator=feature_select_estimator,
+            rfe_step=selector_cfg.get("step", 3),
+            pca_n_components=pca_n_components or 20,
+            detector_list=detector_list,
+            cv_gap=self.args.cv_gap,
+            n_splits=self.args.n_splits,
+            session_gap_minutes=self.args.session_gap_minutes,
+            uid_cols=self.args.concat_features,
+            feature_selector_name=feature_selector_name,
+            seq_n_features_to_select=selector_cfg.get("n_features_to_select", 3),
+            windows_size_in_days=self.args.windows_size_in_days,
+            cat_encoding_method=self.args.cat_encoding_method,
+            imputer_n_neighbors=9,
+            n_clusters=8,
+            top_k_best=selector_cfg.get("k", 50),
+            # k_score_func=selector_cfg.get('score_func',10),
+            do_pca=do_pca,
+            verbose=self.verbose,
+            n_jobs=self.args.n_jobs,
+            **advanced_transformation
+        )
+
+        if model_name == "histGradientBoosting":
+            model.set_params(categorical_features="from_dtype")
+        elif model_name == "catboost":
             raise NotImplementedError
             # model.set_params(cat_features=[])
             # see https://catboost.ai/docs/en/concepts/python-reference_catboostclassifier#cat_features
-        
-        classifier = Pipeline(steps=[('data_processor',data_processor),
-                               ('model',model)]
-                            )
-        params_config = {f"model__{k}":v for k,v in models_config.items() if len(v)>1}
+
+        classifier = Pipeline(
+            steps=[("data_processor", data_processor), ("model", model)]
+        )
+        params_config = {
+            f"model__{k}": v for k, v in models_config.items() if len(v) > 1
+        }
 
         X = self.raw_data_train.copy()
         y = self.y_train.copy()
@@ -440,7 +465,7 @@ class Tuner(object):
             score = results.best_score_
             # results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
             # results["samplers"] = (sampler_names, sampler_cfgs)
-            self.save_checkpoint(model_name=model_name,score=score, results=results)
+            self.save_checkpoint(model_name=model_name, score=score, results=results)
 
         except ValueError:
             traceback.print_exc()

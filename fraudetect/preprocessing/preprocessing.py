@@ -20,7 +20,13 @@ from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.impute import KNNImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, SplineTransformer
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.feature_selection import RFECV, SequentialFeatureSelector, SelectKBest, f_classif, mutual_info_classif
+from sklearn.feature_selection import (
+    RFECV,
+    SequentialFeatureSelector,
+    SelectKBest,
+    f_classif,
+    mutual_info_classif,
+)
 from sklearn.decomposition import PCA
 from sklearn.kernel_approximation import Nystroem
 from sklearn.pipeline import Pipeline, FeatureUnion, make_pipeline
@@ -34,15 +40,18 @@ from ..detectors import get_detector, instantiate_detector
 
 # sklearn.set_config(enable_metadata_routing=True)
 
-def load_cat_encoding(cat_encoding_method: str, 
-                      cols=None, 
-                      hash_n_components=7, 
-                      handle_missing="value", 
-                      return_df=True,
-                      hash_method='md5',
-                    drop_invariant=False,
-                       handle_unknown="value", 
-                       base:int=4):
+
+def load_cat_encoding(
+    cat_encoding_method: str,
+    cols=None,
+    hash_n_components=7,
+    handle_missing="value",
+    return_df=True,
+    hash_method="md5",
+    drop_invariant=False,
+    handle_unknown="value",
+    base: int = 4,
+):
     cat_encodings = ["binary", "count", "hashing", "base_n", "catboost"]
 
     if cat_encoding_method not in cat_encodings:
@@ -50,25 +59,28 @@ def load_cat_encoding(cat_encoding_method: str,
 
     if cat_encoding_method == "binary":
         return BinaryEncoder(
-            handle_missing=handle_missing,cols=cols,
-              drop_invariant=drop_invariant, 
-              handle_unknown=handle_unknown
+            handle_missing=handle_missing,
+            cols=cols,
+            drop_invariant=drop_invariant,
+            handle_unknown=handle_unknown,
         )
 
     elif cat_encoding_method == "count":
         return CountEncoder(
             handle_missing=handle_missing,
-            cols=cols, 
-            drop_invariant=drop_invariant, 
-            handle_unknown=handle_unknown
+            cols=cols,
+            drop_invariant=drop_invariant,
+            handle_unknown=handle_unknown,
         )
 
     elif cat_encoding_method == "hashing":
-        return HashingEncoder(n_components=hash_n_components,
-                              hash_method=hash_method,
-                              cols=cols,
-                              return_df=return_df, 
-                              drop_invariant=drop_invariant)
+        return HashingEncoder(
+            n_components=hash_n_components,
+            hash_method=hash_method,
+            cols=cols,
+            return_df=return_df,
+            drop_invariant=drop_invariant,
+        )
 
     elif cat_encoding_method == "base_n":
         return BaseNEncoder(
@@ -77,7 +89,7 @@ def load_cat_encoding(cat_encoding_method: str,
             handle_missing=handle_missing,
             drop_invariant=drop_invariant,
             handle_unknown=handle_unknown,
-            base=base
+            base=base,
         )
     elif cat_encoding_method == "catboost":
         return CatBoostEncoder(
@@ -89,55 +101,55 @@ def load_cat_encoding(cat_encoding_method: str,
         )
 
 
-def load_cols_transformer(df:pd.DataFrame,
-                          onehot_threshold=9,
-                          n_jobs=1,
-                          scaler = StandardScaler(),
-                          onehot_encoder = OneHotEncoder(handle_unknown='ignore'),
-                          cat_encoding_method='binary',
-                          **cat_encoding_kwargs):
-    
+def load_cols_transformer(
+    df: pd.DataFrame,
+    onehot_threshold=9,
+    n_jobs=1,
+    scaler=StandardScaler(),
+    onehot_encoder=OneHotEncoder(handle_unknown="ignore"),
+    cat_encoding_method="binary",
+    **cat_encoding_kwargs,
+):
     numeric_cols = df.select_dtypes(include=["number"]).columns
     transformers = [("scaled", scaler, numeric_cols)]
 
     # categorical columns
-    if str(cat_encoding_method) == 'None':
-        print('Categorical columns will not be encoded by ColumnTransformer.')
+    if str(cat_encoding_method) == "None":
+        print("Categorical columns will not be encoded by ColumnTransformer.")
 
     else:
         cols = df.select_dtypes(include=["object", "string"]).columns
         cols_onehot = [col for col in cols if df[col].nunique() < onehot_threshold]
-        cols_cat_encode = [
-            col for col in cols if df[col].nunique() >= onehot_threshold
-        ]
+        cols_cat_encode = [col for col in cols if df[col].nunique() >= onehot_threshold]
         cat_encoder = load_cat_encoding(
             cat_encoding_method=cat_encoding_method, **cat_encoding_kwargs
         )
         transformers = transformers + [
-                ("onehot", onehot_encoder, cols_onehot),
-                ("cat_encode", cat_encoder, cols_cat_encode),
-            ]
-            
+            ("onehot", onehot_encoder, cols_onehot),
+            ("cat_encode", cat_encoder, cols_cat_encode),
+        ]
+
     col_transformer = ColumnTransformer(
         transformers, remainder="passthrough", n_jobs=n_jobs, verbose=False
     )
 
-    return col_transformer 
+    return col_transformer
 
 
 def load_feature_selector(
     n_features_to_select=10,
-    cv:TimeSeriesSplit=TimeSeriesSplit(n_splits=5,gap=5000),
-    estimator=DecisionTreeClassifier(max_depth=15,max_features='sqrt',random_state=41),
+    cv: TimeSeriesSplit = TimeSeriesSplit(n_splits=5, gap=5000),
+    estimator=DecisionTreeClassifier(
+        max_depth=15, max_features="sqrt", random_state=41
+    ),
     name: str = "selectkbest",
-    rfe_step:int=3,
-    top_k_best:int=10,
+    rfe_step: int = 3,
+    top_k_best: int = 10,
     scoring: str = "f1",
     k_score_func=mutual_info_classif,
     n_jobs: int = 4,
     verbose: bool = False,
 ) -> Pipeline:
-    
     if name == "rfecv":
         selector = RFECV(
             estimator=estimator,
@@ -157,15 +169,14 @@ def load_feature_selector(
             scoring=scoring,
             cv=cv,
         )
-    
+
     elif name == "selectkbest":
-        selector = SelectKBest(score_func=k_score_func,
-                               k=top_k_best
-                               )
+        selector = SelectKBest(score_func=k_score_func, k=top_k_best)
     else:
         raise NotImplementedError
 
-    return Pipeline(steps=[('feature_selector',selector)])
+    return Pipeline(steps=[("feature_selector", selector)])
+
 
 def get_feature_selector(name: str, config: dict) -> dict:
     """
@@ -181,23 +192,26 @@ def get_feature_selector(name: str, config: dict) -> dict:
 
     return selector, cfg
 
+
 # ------------ pyod detectors
 def fit_outliers_detectors(
     detector_list: list[BaseDetector], X_train: np.ndarray
 ) -> list[BaseDetector] | FeatureUnion:
-    
     model_list = list()
     for model in tqdm(detector_list, desc="fitting-outliers-det-pyod"):
         model.fit(X_train)
         model_list.append(model)
     return model_list
-    
-def compute_score(det:BaseDetector, X):
+
+
+def compute_score(det: BaseDetector, X):
     score = det.decision_function(X)
     return score.reshape(-1, 1)
 
-def fit_detector(det:BaseDetector,X):
+
+def fit_detector(det: BaseDetector, X):
     return det.fit(X)
+
 
 def concat_outliers_scores_pyod(
     fitted_detector_list: list[BaseDetector] | FeatureUnion,
@@ -209,7 +223,7 @@ def concat_outliers_scores_pyod(
             score = model.decision_function(X)
             score = score.reshape((-1, 1))
             scores.append(score)
-            
+
         X_t = np.hstack([X] + scores)
         return X_t
 
@@ -240,7 +254,7 @@ def load_transforms_pyod(
     model_list = list()
 
     # instantiate detectors
-    names = sorted(outliers_det_configs.keys(),reverse=False)
+    names = sorted(outliers_det_configs.keys(), reverse=False)
     for name in names:
         detector, cfg = get_detector(name=name, config=outliers_det_configs)
         detector = instantiate_detector(detector, cfg)
@@ -262,7 +276,6 @@ def load_transforms_pyod(
 
 
 class ColumnDropper(TransformerMixin, BaseEstimator):
-
     _parameter_constraints = {
         "cols_to_drop": [
             "array-like",
@@ -270,27 +283,24 @@ class ColumnDropper(TransformerMixin, BaseEstimator):
         ]
     }
 
-    def __init__(self,cols_to_drop):
-        
+    def __init__(self, cols_to_drop):
         self.cols_to_drop = cols_to_drop
 
-    def fit_transform(self, X, y = None, **fit_params):
-        self.fit(X,y,**fit_params)
-        return self.transform(X=X,y=y)
-            
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X, y, **fit_params)
+        return self.transform(X=X, y=y)
+
     @_fit_context(prefer_skip_nested_validation=True)
-    def fit(self,X:pd.DataFrame,y=None,**fit_params):
-        
+    def fit(self, X: pd.DataFrame, y=None, **fit_params):
         assert isinstance(X, pd.DataFrame), "provide a DataFrame"
-        
-        self.feature_names_in_ = [col for col in X.columns if col != 'TX_FRAUD']
+
+        self.feature_names_in_ = [col for col in X.columns if col != "TX_FRAUD"]
         self.n_features_in_ = len(self.feature_names_in_)
         self.is_fitted_ = True
-        
+
         return self
 
-    def transform(self,X:pd.DataFrame,y=None):
-
+    def transform(self, X: pd.DataFrame, y=None):
         assert isinstance(X, pd.DataFrame), "provide a DataFrame"
 
         df = X.copy()
@@ -305,188 +315,187 @@ class ColumnDropper(TransformerMixin, BaseEstimator):
 
 
 class OutlierDetector(TransformerMixin, BaseEstimator):
-
     _parameter_constraints = {
         "detector_list": [
             "array-like",
             Interval(Integral, 1, None, closed="left"),
         ],
-        "n_jobs":[int],
+        "n_jobs": [int],
     }
 
-    def __init__(self, 
-                 detector_list: list[BaseDetector]=(None,),
-                 n_jobs:int=1):
-                
+    def __init__(self, detector_list: list[BaseDetector] = (None,), n_jobs: int = 1):
         self.detector_list = detector_list
         self.n_jobs = n_jobs
-        
-        assert all([det is not None for det in self.detector_list]), "Provide detector_list"
 
-    def fit_transform(self, X, y = None, **fit_params):
-        self.fit(X,y,**fit_params)
-        return self.transform(X=X,y=y)
-            
+        assert all([det is not None for det in self.detector_list]), (
+            "Provide detector_list"
+        )
+
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X, y, **fit_params)
+        return self.transform(X=X, y=y)
+
     @_fit_context(prefer_skip_nested_validation=True)
-    def fit(self,X:pd.DataFrame,y=None,**fit_params):
-        
-        assert all([det is not None for det in self.detector_list]), "Provide detector_list"
-        
-        validate_data(self,X=X,y=y)
-        
+    def fit(self, X: pd.DataFrame, y=None, **fit_params):
+        assert all([det is not None for det in self.detector_list]), (
+            "Provide detector_list"
+        )
+
+        validate_data(self, X=X, y=y)
+
         # print("<Start fitting-outliers-det-pyod/>")
         # Done by the main thread > avoid race conditions in transform
         # _ = Parallel(n_jobs=1)([delayed(fit_detector)(det,X) for det in self.detector_list])
         [det.fit(X) for det in self.detector_list]
-        # print("</End fitting-outliers-det-pyod>") 
-        
+        # print("</End fitting-outliers-det-pyod>")
+
         self.is_fitted_ = True
-                
+
         return self
 
-    def transform(self,X,y=None):
-        
-        validate_data(self,X=X,reset=False)
-                
+    def transform(self, X, y=None):
+        validate_data(self, X=X, reset=False)
+
         # scores = Parallel(n_jobs=self.n_jobs)([delayed(compute_score)(det,X) for det in self.detector_list])
-        scores = [det.decision_function(X).reshape((-1,1)) for det in self.detector_list]
-        
-        if len(scores)>1:
-            scores = np.hstack(scores)       
+        scores = [
+            det.decision_function(X).reshape((-1, 1)) for det in self.detector_list
+        ]
+
+        if len(scores) > 1:
+            scores = np.hstack(scores)
         else:
             scores = scores[0]
-            
+
         return scores
 
 
 class AdvancedFeatures(TransformerMixin, BaseEstimator):
-
     _parameter_constraints = {
-        "feature_selector_name":[str],
-        "estimator":[BaseEstimator],
-        "n_splits":[int],
-        "cv_gap":[int],
-        "n_features_to_select":[int],
-        "scoring":[str],
-        "n_jobs":[int],    
-        "rfe_step":[int],
-        "top_k_best":[int],         
-        "verbose":[bool],
-        "do_pca":[bool],
-        "pca_n_components":[int],
-        "k_score_func":[callable]
-    }
-
-    def __init__(self,
-                 feature_selector_name:str='selectkbest',
-                 k_score_func=mutual_info_classif,
-                 estimator=DecisionTreeClassifier(),
-                 n_splits=5,
-                 cv_gap=5000,
-                 n_features_to_select=3,
-                 do_pca:bool=False,
-                 rfe_step=3,
-                 top_k_best=10,
-                 scoring='f1',
-                 pca_n_components:int=20,
-                 n_jobs=1,             
-                 verbose=False
-                 ):
-        
-        self.n_features_to_select=n_features_to_select
-        self.rfe_step=rfe_step
-        self.top_k_best=top_k_best
-        self.feature_selector_name = feature_selector_name
-        self.k_score_func = k_score_func
-        
-        self.scoring = scoring
-        
-        self.do_pca = do_pca
-        self.pca_n_components = pca_n_components
-                
-        self.n_jobs = n_jobs
-        self.n_splits = n_splits
-        self.cv_gap = cv_gap
-        
-        self.estimator=estimator
-        self.verbose=verbose
-        
-    def fit_transform(self, X, y = None, **fit_params):
-        self.fit(X=X,y=y,**fit_params)
-        return self.transform(X=X,y=y)
-            
-    
-    @_fit_context(prefer_skip_nested_validation=True)
-    def fit(self,X,y=None,**fit_params):
-        
-        assert any([self.do_pca, self.feature_selector_name != 'None']), "Provide do_pca=True or feature_selector_name != 'None'"
-                
-        validate_data(self,X=X,y=y)
-            
-        self._pca_transform = None
-        self._selector = None
-        
-        if self.do_pca:
-            n_components = min(self.pca_n_components,X.shape[1])
-            if n_components == X.shape[1]:
-                print(f"Clipping pca_n_components to X.shape[1]={X.shape[1]}")
-                
-            self._pca_transform = make_pipeline(StandardScaler(), PCA(n_components=n_components))
-            X = self._pca_transform.fit_transform(X=X,y=y)
-        
-        if self.feature_selector_name != 'None':
-            cv = TimeSeriesSplit(n_splits=self.n_splits,gap=self.cv_gap)
-            self._selector = load_feature_selector(n_features_to_select=self.n_features_to_select,
-                                                   cv=cv,
-                                                   estimator=self.estimator,
-                                                   name = self.feature_selector_name,
-                                                   top_k_best=self.top_k_best,
-                                                   k_score_func=self.k_score_func,
-                                                   rfe_step=self.rfe_step,
-                                                   scoring = self.scoring,
-                                                   n_jobs = self.n_jobs,
-                                                   verbose = self.verbose,
-                                                   )
-            self._selector.fit(X=X,y=y)
-                        
-        self.is_fitted_ = True
-        
-        return self
-
-    def transform(self,X,y=None):
-        
-        validate_data(self,X=X,reset=False)
-        
-        if self._pca_transform is not None:
-            X = self._pca_transform.transform(X=X)
-        
-        if self._selector is not None:
-            X = self._selector.transform(X=X)
-            
-        return X 
-
-
-class FeatureEncoding(TransformerMixin, BaseEstimator):
-
-    _parameter_constraints = {
-        "add_imputer":[bool],
-        "imputer_n_neighbors":[int],
-        "onehot_threshold":[int],
-        "cat_encoding_method":[str],
-        "n_jobs":[int],
-        'cat_encoding_kwargs':[dict]
+        "feature_selector_name": [str],
+        "estimator": [BaseEstimator],
+        "n_splits": [int],
+        "cv_gap": [int],
+        "n_features_to_select": [int],
+        "scoring": [str],
+        "n_jobs": [int],
+        "rfe_step": [int],
+        "top_k_best": [int],
+        "verbose": [bool],
+        "do_pca": [bool],
+        "pca_n_components": [int],
+        "k_score_func": [callable],
     }
 
     def __init__(
         self,
-        cat_encoding_method: str='binary' ,
+        feature_selector_name: str = "selectkbest",
+        k_score_func=mutual_info_classif,
+        estimator=DecisionTreeClassifier(),
+        n_splits=5,
+        cv_gap=5000,
+        n_features_to_select=3,
+        do_pca: bool = False,
+        rfe_step=3,
+        top_k_best=10,
+        scoring="f1",
+        pca_n_components: int = 20,
+        n_jobs=1,
+        verbose=False,
+    ):
+        self.n_features_to_select = n_features_to_select
+        self.rfe_step = rfe_step
+        self.top_k_best = top_k_best
+        self.feature_selector_name = feature_selector_name
+        self.k_score_func = k_score_func
+
+        self.scoring = scoring
+
+        self.do_pca = do_pca
+        self.pca_n_components = pca_n_components
+
+        self.n_jobs = n_jobs
+        self.n_splits = n_splits
+        self.cv_gap = cv_gap
+
+        self.estimator = estimator
+        self.verbose = verbose
+
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X=X, y=y, **fit_params)
+        return self.transform(X=X, y=y)
+
+    @_fit_context(prefer_skip_nested_validation=True)
+    def fit(self, X, y=None, **fit_params):
+        assert any([self.do_pca, self.feature_selector_name != "None"]), (
+            "Provide do_pca=True or feature_selector_name != 'None'"
+        )
+
+        validate_data(self, X=X, y=y)
+
+        self._pca_transform = None
+        self._selector = None
+
+        if self.do_pca:
+            n_components = min(self.pca_n_components, X.shape[1])
+            if n_components == X.shape[1]:
+                print(f"Clipping pca_n_components to X.shape[1]={X.shape[1]}")
+
+            self._pca_transform = make_pipeline(
+                StandardScaler(), PCA(n_components=n_components)
+            )
+            X = self._pca_transform.fit_transform(X=X, y=y)
+
+        if self.feature_selector_name != "None":
+            cv = TimeSeriesSplit(n_splits=self.n_splits, gap=self.cv_gap)
+            self._selector = load_feature_selector(
+                n_features_to_select=self.n_features_to_select,
+                cv=cv,
+                estimator=self.estimator,
+                name=self.feature_selector_name,
+                top_k_best=min(self.top_k_best,X.shape[1]),
+                k_score_func=self.k_score_func,
+                rfe_step=self.rfe_step,
+                scoring=self.scoring,
+                n_jobs=self.n_jobs,
+                verbose=self.verbose,
+            )
+            self._selector.fit(X=X, y=y)
+
+        self.is_fitted_ = True
+
+        return self
+
+    def transform(self, X, y=None):
+        validate_data(self, X=X, reset=False)
+
+        if self._pca_transform is not None:
+            X = self._pca_transform.transform(X=X)
+
+        if self._selector is not None:
+            X = self._selector.transform(X=X)
+
+        return X
+
+
+class FeatureEncoding(TransformerMixin, BaseEstimator):
+    _parameter_constraints = {
+        "add_imputer": [bool],
+        "imputer_n_neighbors": [int],
+        "onehot_threshold": [int],
+        "cat_encoding_method": [str],
+        "n_jobs": [int],
+        "cat_encoding_kwargs": [dict],
+    }
+
+    def __init__(
+        self,
+        cat_encoding_method: str = "binary",
         add_imputer: bool = False,
-        imputer_n_neighbors:int=5,
+        imputer_n_neighbors: int = 5,
         onehot_threshold: int = 9,
         n_jobs: int = 1,
-        cat_encoding_kwargs={}
+        cat_encoding_kwargs={},
     ):
-
         self.add_imputer = add_imputer
         self.imputer_n_neighbors = imputer_n_neighbors
 
@@ -498,18 +507,16 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         self.n_jobs = n_jobs
 
         self.get_feature_names_out = None
-    
-    def check_dataframe(self,X:pd.DataFrame):
-        
+
+    def check_dataframe(self, X: pd.DataFrame):
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
         assert X.isna().sum().sum() < 1, "Found NaN values"
-        
-    def load_cols_transformer(self,df:pd.DataFrame):
-        
+
+    def load_cols_transformer(self, df: pd.DataFrame):
         # scalers
         scaler = StandardScaler()
-        onehot_encoder = OneHotEncoder(handle_unknown='ignore')
-        
+        onehot_encoder = OneHotEncoder(handle_unknown="ignore")
+
         # numeric columns
         numeric_cols = df.select_dtypes(include=["number"]).columns
         # numeric_cols = [col for col in numeric_cols]
@@ -517,48 +524,46 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         transformers = [("scaled", scaler, numeric_cols)]
 
         # categorical columns
-        if str(self.cat_encoding_method) == 'None':
-            print('Categorical columns will not be encoded by ColumnTransformer.')
+        if str(self.cat_encoding_method) == "None":
+            print("Categorical columns will not be encoded by ColumnTransformer.")
 
         else:
-            cols = df.select_dtypes(include=["object", "string","category"]).columns
-            cols_onehot = [col for col in cols if df[col].nunique() < self.onehot_threshold]
+            cols = df.select_dtypes(include=["object", "string", "category"]).columns
+            cols_onehot = [
+                col for col in cols if df[col].nunique() < self.onehot_threshold
+            ]
             cols_cat_encode = [
                 col for col in cols if df[col].nunique() >= self.onehot_threshold
             ]
             cat_encoder = load_cat_encoding(
-                cat_encoding_method=self.cat_encoding_method, 
-                **self.cat_encoding_kwargs
+                cat_encoding_method=self.cat_encoding_method, **self.cat_encoding_kwargs
             )
             transformers = transformers + [
-                    ("onehot", onehot_encoder, cols_onehot),
-                    ("cat_encode", cat_encoder, cols_cat_encode),
-                ]
-                
+                ("onehot", onehot_encoder, cols_onehot),
+                ("cat_encode", cat_encoder, cols_cat_encode),
+            ]
+
         col_transformer = ColumnTransformer(
-            transformers, 
-            remainder="passthrough", 
-            n_jobs=self.n_jobs, 
-            verbose=False
+            transformers, remainder="passthrough", n_jobs=self.n_jobs, verbose=False
         )
 
-        return col_transformer 
+        return col_transformer
 
     @_fit_context(prefer_skip_nested_validation=True)
-    def fit(self, X: pd.DataFrame, y=None,**fit_params):
-
+    def fit(self, X: pd.DataFrame, y=None, **fit_params):
         self.check_dataframe(X)
 
         self._col_transformer = self.load_cols_transformer(df=X)
         self._imputer = None
         if self.add_imputer:
-            self._imputer = KNNImputer(n_neighbors=self.imputer_n_neighbors,
-                                       missing_values=np.nan,
-                                       add_indicator=False,
-                                       weights='distance'
-                                       )
-            
-        self._col_transformer.fit(X=X,y=y)
+            self._imputer = KNNImputer(
+                n_neighbors=self.imputer_n_neighbors,
+                missing_values=np.nan,
+                add_indicator=False,
+                weights="distance",
+            )
+
+        self._col_transformer.fit(X=X, y=y)
 
         self.feature_names_in_ = [col for col in X.columns]
         self.n_features_in_ = len(self.feature_names_in_)
@@ -568,30 +573,28 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
         return self
 
-    def transform(self, X:pd.DataFrame, y=None):
-        
+    def transform(self, X: pd.DataFrame, y=None):
         self.check_dataframe(X)
 
         X = self._col_transformer.transform(X=X)
-        
+
         if self._imputer is not None:
-            X = self._imputer.fit_transform(X=X,y=y)
-            
-        X = pd.DataFrame(data=X,columns=self.get_feature_names_out).convert_dtypes()
-        
-        cat_cols = X.select_dtypes(include=["object", "string","category"]).columns
+            X = self._imputer.fit_transform(X=X, y=y)
+
+        X = pd.DataFrame(data=X, columns=self.get_feature_names_out).convert_dtypes()
+
+        cat_cols = X.select_dtypes(include=["object", "string", "category"]).columns
         for col in cat_cols:
-            X[col] = X[col].astype('category')
-        
+            X[col] = X[col].astype("category")
+
         return X
 
-    def fit_transform(self, X, y = None, **fit_params):
-        self.fit(X=X,y=y,**fit_params)
-        return self.transform(X=X,y=y)
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X=X, y=y, **fit_params)
+        return self.transform(X=X, y=y)
 
 
 class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
-    
     _parameter_constraints = {
         "windows_size_in_days": [
             "array-like",
@@ -605,32 +608,34 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             "array-like",
             Interval(Integral, 1, None, closed="left"),
         ],
-        "add_imputer":[bool],
-        "add_fraud_rate_features":[bool],
-        "session_gap_minutes":[int],
-        "n_clusters":[int],
-        "cat_encoding_method":[str],
-        "uid_col_name":[str],
-        "cluster_on_feature":[str],
-        'use_spline':[bool],
-        'spline_degree':[int],
-        'spline_n_knots':[int],
-        'use_sincos':[bool],
-        'use_nystrom':[bool],
-        'nystroem_kernel':[str],
-        'add_seasonal_features':[bool],
-        'add_fft':[bool]
+        "add_imputer": [bool],
+        "add_fraud_rate_features": [bool],
+        "session_gap_minutes": [int],
+        "n_clusters": [int],
+        "cat_encoding_method": [str],
+        "uid_col_name": [str],
+        "cluster_on_feature": [str],
+        "use_spline": [bool],
+        "spline_degree": [int],
+        "spline_n_knots": [int],
+        "use_sincos": [bool],
+        "use_nystrom": [bool],
+        "nystroem_kernel": [str],
+        "add_seasonal_features": [bool],
+        "add_fft": [bool],
     }
-    
+
     def __init__(
         self,
         windows_size_in_days: list[int] = [1, 7, 30],
-        uid_cols: list[str] = [None,],
+        uid_cols: list[str] = [
+            None,
+        ],
         session_gap_minutes: int = 30,
         n_clusters: int = 8,
-        uid_col_name:str="CustomerUID",
-        add_fraud_rate_features:bool=True,
-        cluster_on_feature:str="CUSTOMER_ID",
+        uid_col_name: str = "CustomerUID",
+        add_fraud_rate_features: bool = True,
+        cluster_on_feature: str = "CUSTOMER_ID",
         use_spline=False,
         spline_degree=3,
         spline_n_knots=6,
@@ -638,41 +643,40 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         use_nystrom=False,
         add_seasonal_features=False,
         add_fft=False,
-        nystroem_kernel='poly',
+        nystroem_kernel="poly",
         nystroem_components=50,
-        behavioral_drift_cols:list[str]=["AccountId",]
+        behavioral_drift_cols: list[str] = [
+            "AccountId",
+        ],
     ):
-        
         self.windows_size_in_days = windows_size_in_days
         self.uid_cols = uid_cols
         self.uid_col_name = uid_col_name
         self.behavioral_drift_cols = behavioral_drift_cols
-        self.add_fraud_rate_features= add_fraud_rate_features
+        self.add_fraud_rate_features = add_fraud_rate_features
         self.session_gap_minutes = session_gap_minutes
         self.n_clusters = n_clusters
         self.cluster_on_feature = cluster_on_feature
 
-        self.add_seasonal_features=add_seasonal_features
+        self.add_seasonal_features = add_seasonal_features
         self.add_fft = add_fft
 
         self.use_spline = use_spline
-        self.spline_degree=spline_degree
-        self.spline_n_knots=spline_n_knots
+        self.spline_degree = spline_degree
+        self.spline_n_knots = spline_n_knots
 
         self.use_sincos = use_sincos
 
         self.use_nystrom = use_nystrom
-        self.nystroem_kernel=nystroem_kernel
-        self.nystroem_components=nystroem_components
-    
-    def check_dataframe(self,X:pd.DataFrame):
-        
+        self.nystroem_kernel = nystroem_kernel
+        self.nystroem_components = nystroem_components
+
+    def check_dataframe(self, X: pd.DataFrame):
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
         assert X.isna().sum().sum() < 1, "Found NaN values"
-    
+
     @_fit_context(prefer_skip_nested_validation=True)
-    def fit(self, X:pd.DataFrame, y=None, **fit_params):
-        
+    def fit(self, X: pd.DataFrame, y=None, **fit_params):
         self.check_dataframe(X=X)
 
         # reset index > causes issues when doing cross-val
@@ -686,22 +690,30 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             )
             self._channel_fraud_rate = (
                 df.groupby("ChannelId")["TX_FRAUD"].mean().rename("ChannelIdFraudRate")
-            )          
-        
+            )
+
         df_cyclical = self._get_cyclical_data(df=X)
         self._cyclical_features = list(df_cyclical.columns)
 
         if self.use_spline:
             self._spline_transformers = {}
             for feature in self._cyclical_features:
-                transformer = SplineTransformer(degree=self.spline_degree, n_knots=self.spline_n_knots, extrapolation='periodic')
-                self._spline_transformers[feature] = transformer.fit(df_cyclical[[feature]])
-        
+                transformer = SplineTransformer(
+                    degree=self.spline_degree,
+                    n_knots=self.spline_n_knots,
+                    extrapolation="periodic",
+                )
+                self._spline_transformers[feature] = transformer.fit(
+                    df_cyclical[[feature]]
+                )
+
         if self.use_nystrom:
-            self._nystrom = Nystroem(kernel=self.nystroem_kernel, 
-                                    degree=3, 
-                                    n_components=self.nystroem_components,
-                                    random_state=41)
+            self._nystrom = Nystroem(
+                kernel=self.nystroem_kernel,
+                degree=3,
+                n_components=self.nystroem_components,
+                random_state=41,
+            )
             self._nystrom.fit(df_cyclical)
 
         self.feature_names_in_ = list(X.columns)
@@ -713,13 +725,12 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         return self
 
-    def transform(self, X:pd.DataFrame, y=None):
-        
+    def transform(self, X: pd.DataFrame, y=None):
         self.check_dataframe(X=X)
-        
+
         # reset index > causes issues when doing cross-val
         df = X.copy().reset_index(drop=True)
-        
+
         df = df.sort_values(by=["TX_DATETIME"])
 
         if all([col is not None for col in self.uid_cols]):
@@ -740,12 +751,12 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         if self.add_fraud_rate_features:
             df = self._add_fraud_rate_features(df)
-        
+
         if self.add_seasonal_features:
-            df = self._add_grouped_seasonal_decomposition(df=df,freq='D',period=7)
-        
+            df = self._add_grouped_seasonal_decomposition(df=df, freq="D", period=7)
+
         if self.add_fft:
-            df = self._add_grouped_fft_features(df=df,freq='D',top_n_freqs=5)                
+            df = self._add_grouped_fft_features(df=df, freq="D", top_n_freqs=5)
 
         # if self.n_clusters is not None:
         #     df = self._add_customer_clusters(df)
@@ -756,9 +767,9 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         return df
 
-    def fit_transform(self, X, y = None, **fit_params):
-        self.fit(X=X,y=y,**fit_params)
-        return self.transform(X=X,y=y)
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X=X, y=y, **fit_params)
+        return self.transform(X=X, y=y)
 
     # ---------- Private Helper Methods ----------
     def _create_unique_identifier(self, df: pd.DataFrame):
@@ -768,14 +779,17 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         return df
 
-    def _get_cyclical_data(self,df:pd.DataFrame):
-
-        X = df[["TX_DATETIME",]].copy()
+    def _get_cyclical_data(self, df: pd.DataFrame):
+        X = df[
+            [
+                "TX_DATETIME",
+            ]
+        ].copy()
 
         X["Hour"] = X["TX_DATETIME"].dt.hour
         X["DayOfWeek"] = X["TX_DATETIME"].dt.dayofweek
 
-        X.drop(columns=['TX_DATETIME'],inplace=True)
+        X.drop(columns=["TX_DATETIME"], inplace=True)
 
         return X
 
@@ -816,10 +830,9 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df["DayOfWeek"] = df["TX_DATETIME"].dt.dayofweek
         df["IsWeekend"] = df["DayOfWeek"].isin([5, 6]).astype(int)
         df["IsNight"] = df["Hour"].between(0, 6).astype(int)
-        
-        for col in ["AccountId", "CUSTOMER_ID"]:
 
-            df.sort_values(by=[col, "TX_DATETIME"],inplace=True)
+        for col in ["AccountId", "CUSTOMER_ID"]:
+            df.sort_values(by=[col, "TX_DATETIME"], inplace=True)
 
             df[col + "_TimeSinceLastTxn"] = (
                 df.groupby(col)["TX_DATETIME"].diff().dt.total_seconds().fillna(0) / 60
@@ -846,7 +859,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         return df
 
-    def _add_account_stats(self, df:pd.DataFrame):
+    def _add_account_stats(self, df: pd.DataFrame):
         account_stats = (
             df.groupby("AccountId")["TX_AMOUNT"]
             .agg(["mean", "std"])
@@ -855,7 +868,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         account_stats["AccountStdAmt"] = (
             account_stats["AccountStdAmt"].fillna(1).replace(0, 1)
         )
-        account_stats.fillna({"AccountMeanAmt":0},inplace=True)
+        account_stats.fillna({"AccountMeanAmt": 0}, inplace=True)
 
         df = df.merge(account_stats, on="AccountId", how="left")
         df["AccountAmountZScore"] = (df["TX_AMOUNT"] - df["AccountMeanAmt"]) / df[
@@ -863,7 +876,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         ]
         df["AccountAmountOverAvg"] = df["TX_AMOUNT"] / df["AccountMeanAmt"]
 
-        # df.fillna({"AccountAmountOverAvg":0, 
+        # df.fillna({"AccountAmountOverAvg":0,
         #            "AccountAmountZScore":0},inplace=True)
 
         return df
@@ -932,7 +945,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df = df.merge(self._product_fraud_rate, on="ProductId", how="left")
         df = df.merge(self._provider_fraud_rate, on="ProviderId", how="left")
         df = df.merge(self._channel_fraud_rate, on="ChannelId", how="left")
-        
+
         for col in ["ProductFraudRate", "ProviderFraudRate", "ChannelIdFraudRate"]:
             _mean = df[col].mean(skipna=True)
             df[col] = df[col].fillna(_mean)
@@ -940,9 +953,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         return df
 
     def _compute_behavioral_drift(self, df):
-        
         df = df.sort_values(by=["TX_DATETIME"]).set_index("TX_DATETIME")
-        
+
         for col in self.behavioral_drift_cols:
             val_7d = df.groupby(col)["TX_AMOUNT"].transform(
                 lambda x: x.rolling("7d").mean()
@@ -964,7 +976,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         return df
 
     def _compute_avg_txn_features(self, df):
-
         df = df.sort_values(by=["TX_DATETIME"])
 
         for col in self.behavioral_drift_cols:
@@ -983,7 +994,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             df["PctChangeFromAvg"] = (
                 df[f"{col}_MovingAvg5"] - df[f"{col}_LongTermAvg"]
             ) / df[f"{col}_LongTermAvg"]
-        
+
         return df
 
     def _compute_batch_gap_features(self, df):
@@ -1038,49 +1049,45 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         )
         return df
 
-    def _add_cyclical_features_transform(self,df):
-
+    def _add_cyclical_features_transform(self, df):
         X = df
 
         if self.use_spline:
             for feature in self._cyclical_features:
                 transformed = self._spline_transformers[feature].transform(X[[feature]])
-                spline_cols = [f'{feature}_spline_{i}' for i in range(transformed.shape[1])]
+                spline_cols = [
+                    f"{feature}_spline_{i}" for i in range(transformed.shape[1])
+                ]
                 X[spline_cols] = transformed
 
         if self.use_sincos:
             for feature in self._cyclical_features:
                 max_val = X[feature].max()
-                X[f'{feature}_sin'] = np.sin(2 * np.pi * X[feature] / max_val)
-                X[f'{feature}_cos'] = np.cos(2 * np.pi * X[feature] / max_val)
+                X[f"{feature}_sin"] = np.sin(2 * np.pi * X[feature] / max_val)
+                X[f"{feature}_cos"] = np.cos(2 * np.pi * X[feature] / max_val)
 
         if self.use_nystrom:
             kernel_features = self._nystrom.transform(X[self._cyclical_features])
-            kernel_cols = [f'nystrom_{i}' for i in range(kernel_features.shape[1])]
+            kernel_cols = [f"nystrom_{i}" for i in range(kernel_features.shape[1])]
             X[kernel_cols] = kernel_features
-        
+
         return df
-    
-    def _add_grouped_seasonal_decomposition(self, df, freq='D', period=7):
+
+    def _add_grouped_seasonal_decomposition(self, df, freq="D", period=7):
         features = []
 
-        group_key = 'AccountId'
-        value_col = 'TX_AMOUNT'
-        time_col = 'TX_DATETIME'
+        group_key = "AccountId"
+        value_col = "TX_AMOUNT"
+        time_col = "TX_DATETIME"
 
         for group_val, group_df in df.groupby(group_key):
-            ts = (
-                group_df.set_index(time_col)[value_col]
-                .resample(freq)
-                .sum()
-                .fillna(0)
-            )
+            ts = group_df.set_index(time_col)[value_col].resample(freq).sum().fillna(0)
 
             if len(ts) < period * 2:
                 continue
 
             try:
-                decomposition = seasonal_decompose(ts, model='additive', period=period)
+                decomposition = seasonal_decompose(ts, model="additive", period=period)
                 trend = decomposition.trend.dropna()
                 seasonal = decomposition.seasonal.dropna()
                 resid = decomposition.resid.dropna()
@@ -1097,54 +1104,50 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                 # Residual variance
                 resid_var = np.var(resid)
 
-                features.append({
-                    group_key: group_val,
-                    'trend_slope': trend_slope,
-                    'seasonal_amplitude': seasonal_amp,
-                    'residual_variance': resid_var
-                })
+                features.append(
+                    {
+                        group_key: group_val,
+                        "trend_slope": trend_slope,
+                        "seasonal_amplitude": seasonal_amp,
+                        "residual_variance": resid_var,
+                    }
+                )
 
             except Exception:
                 continue
-        
+
         seasonal_df = pd.DataFrame(features)
-        df = df.merge(seasonal_df, on=group_key, how='left')
+        df = df.merge(seasonal_df, on=group_key, how="left")
         nan_mask = df[list(seasonal_df.columns)].isna()
-        df[nan_mask]  = 0
+        df[nan_mask] = 0
 
         return df
 
-    def _add_grouped_fft_features(self, df, freq='D', top_n_freqs=5):
-        
+    def _add_grouped_fft_features(self, df, freq="D", top_n_freqs=5):
         features = []
-        group_key = 'AccountId'
-        value_col = 'TX_AMOUNT'
-        time_col = 'TX_DATETIME'
+        group_key = "AccountId"
+        value_col = "TX_AMOUNT"
+        time_col = "TX_DATETIME"
 
         for group_val, group_df in df.groupby(group_key):
-            ts = (
-                group_df.set_index(time_col)[value_col]
-                .resample(freq)
-                .sum()
-                .fillna(0)
-            )
+            ts = group_df.set_index(time_col)[value_col].resample(freq).sum().fillna(0)
 
             if len(ts) < top_n_freqs * 2:
                 continue
 
             fft_vals = np.abs(fft(ts.values))
-            fft_vals = fft_vals[1:top_n_freqs + 1]  # Exclude DC component
+            fft_vals = fft_vals[1 : top_n_freqs + 1]  # Exclude DC component
 
             fft_dict = {group_key: group_val}
             for i, val in enumerate(fft_vals, start=1):
-                fft_dict[f'fft_freq_{i}'] = val
+                fft_dict[f"fft_freq_{i}"] = val
 
             features.append(fft_dict)
-        
+
         fft_df = pd.DataFrame(features)
-        df = df.merge(fft_df, on=group_key, how='left')
+        df = df.merge(fft_df, on=group_key, how="left")
         nan_mask = df[list(fft_df.columns)].isna()
-        df[nan_mask]  = 0
+        df[nan_mask] = 0
 
         return df
 
@@ -1167,119 +1170,114 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         return df
 
 
+def load_workflow(
+    cols_to_drop,
+    pca_n_components=20,
+    detector_list=None,
+    n_splits=5,
+    cv_gap=5000,
+    scoring="f1",
+    onehot_threshold=9,
+    session_gap_minutes=60 * 3,
+    uid_cols=[
+        None,
+    ],
+    add_fraud_rate_features: bool = True,
+    behavioral_drift_cols=[
+        "AccountId",
+    ],
+    feature_select_estimator=DecisionTreeClassifier(),
+    feature_selector_name: str | None = "selectkbest",
+    seq_n_features_to_select=3,
+    windows_size_in_days=[1, 7, 30],
+    cat_encoding_method: str | None = "binary",
+    cluster_on_feature="CUSTOMER_ID",
+    imputer_n_neighbors=9,
+    add_fft=False,
+    add_seasonal_features=False,
+    use_nystrom=False,
+    use_sincos=False,
+    use_spline=False,
+    spline_degree=3,
+    spline_n_knots=6,
+    nystroem_kernel="poly",
+    nystroem_components=50,
+    add_imputer=False,
+    rfe_step=3,
+    n_clusters=8,
+    top_k_best=10,
+    k_score_func=mutual_info_classif,
+    do_pca=True,
+    verbose=False,
+    n_jobs=2,
+):
+    # preliminary feature expansion
+    feature_engineer = FraudFeatureEngineer(
+        windows_size_in_days=windows_size_in_days,
+        uid_cols=uid_cols,
+        add_fraud_rate_features=add_fraud_rate_features,
+        session_gap_minutes=session_gap_minutes,
+        n_clusters=n_clusters,
+        add_fft=add_fft,
+        add_seasonal_features=add_seasonal_features,
+        use_nystrom=use_nystrom,
+        use_sincos=use_sincos,
+        use_spline=use_spline,
+        spline_degree=spline_degree,
+        spline_n_knots=spline_n_knots,
+        nystroem_kernel=nystroem_kernel,
+        nystroem_components=nystroem_components,
+        behavioral_drift_cols=behavioral_drift_cols,
+        cluster_on_feature=cluster_on_feature,
+        uid_col_name="CustomerUID",  # name given to uid cols created from interactions of uid_cols
+    )
 
-def load_workflow(cols_to_drop,
-                  pca_n_components=20,
-                  detector_list=None,
-                  n_splits=5,
-                  cv_gap=5000,
-                  scoring='f1',
-                  onehot_threshold=9,
-                  session_gap_minutes=60*3,
-                  uid_cols=[None,],
-                  add_fraud_rate_features:bool=True,
-                  behavioral_drift_cols=["AccountId",],
-                  feature_select_estimator=DecisionTreeClassifier(),
-                  feature_selector_name:str|None="selectkbest",
-                  seq_n_features_to_select=3,
-                  windows_size_in_days=[1,7,30],
-                  cat_encoding_method:str|None='binary',
-                  cluster_on_feature="CUSTOMER_ID",
-                  imputer_n_neighbors=9,
-                  add_fft=False,
-                    add_seasonal_features=False,
-                    use_nystrom=False,
-                    use_sincos=False,
-                    use_spline=False,
-                    spline_degree=3,
-                    spline_n_knots=6,
-                    nystroem_kernel='poly',
-                    nystroem_components=50,
-                  add_imputer=False,
-                  rfe_step=3,
-                  n_clusters=8,
-                  top_k_best=10,
-                  k_score_func=mutual_info_classif,
-                  do_pca=True,
-                  verbose=False,
-                  n_jobs=2):
-    
-   # preliminary feature expansion
-    feature_engineer = FraudFeatureEngineer(windows_size_in_days=windows_size_in_days,
-                                             uid_cols=uid_cols,
-                                             add_fraud_rate_features=add_fraud_rate_features,
-                                             session_gap_minutes=session_gap_minutes,
-                                             n_clusters=n_clusters,
-                                             add_fft=add_fft,
-                                             add_seasonal_features=add_seasonal_features,
-                                             use_nystrom=use_nystrom,
-                                             use_sincos=use_sincos,
-                                             use_spline=use_spline,
-                                             spline_degree=spline_degree,
-                                            spline_n_knots=spline_n_knots,
-                                            nystroem_kernel=nystroem_kernel,
-                                            nystroem_components=nystroem_components,
-                                             behavioral_drift_cols=behavioral_drift_cols,
-                                             cluster_on_feature=cluster_on_feature,
-                                             uid_col_name="CustomerUID", # name given to uid cols created from interactions of uid_cols
-                                            )
-    
     # drop columns
     dropper = ColumnDropper(cols_to_drop=cols_to_drop)
 
     # encodes features and impute missing values
-    encoder = FeatureEncoding(add_imputer=add_imputer,
-                                cat_encoding_method=str(cat_encoding_method),
-                                imputer_n_neighbors=imputer_n_neighbors,
-                                n_jobs=n_jobs,
-                                onehot_threshold=onehot_threshold,
-                                )
-    
+    encoder = FeatureEncoding(
+        add_imputer=add_imputer,
+        cat_encoding_method=str(cat_encoding_method),
+        imputer_n_neighbors=imputer_n_neighbors,
+        n_jobs=n_jobs,
+        onehot_threshold=onehot_threshold,
+    )
+
     # get advanced features -> PCA, feature selection + outliers scores
     advanced_features = []
     if (feature_selector_name is not None) or do_pca:
-        enhancer = AdvancedFeatures(verbose=bool(verbose),
-                                            estimator=feature_select_estimator,
-                                            do_pca=do_pca,
-                                            top_k_best=top_k_best,
-                                            k_score_func=k_score_func,
-                                            rfe_step=rfe_step,
-                                            n_jobs=n_jobs,
-                                            n_splits=n_splits,
-                                            n_features_to_select=seq_n_features_to_select,
-                                            cv_gap=cv_gap,
-                                            scoring=scoring,
-                                            pca_n_components=pca_n_components,
-                                            feature_selector_name=str(feature_selector_name)
-                                            )
-        advanced_features.append(('feature_mixer', enhancer))
-    
+        enhancer = AdvancedFeatures(
+            verbose=bool(verbose),
+            estimator=feature_select_estimator,
+            do_pca=do_pca,
+            top_k_best=top_k_best,
+            k_score_func=k_score_func,
+            rfe_step=rfe_step,
+            n_jobs=n_jobs,
+            n_splits=n_splits,
+            n_features_to_select=seq_n_features_to_select,
+            cv_gap=cv_gap,
+            scoring=scoring,
+            pca_n_components=pca_n_components,
+            feature_selector_name=str(feature_selector_name),
+        )
+        advanced_features.append(("feature_mixer", enhancer))
+
     if detector_list is not None:
         pyod_det = OutlierDetector(detector_list=detector_list)
-        advanced_features.append(('outlier_scores', pyod_det))
-        
+        advanced_features.append(("outlier_scores", pyod_det))
+
     if (detector_list is not None) or (feature_selector_name is not None):
-        advanced_features = FeatureUnion(transformer_list=advanced_features,
-                                    n_jobs=n_jobs
-                                    )
-    
+        advanced_features = FeatureUnion(
+            transformer_list=advanced_features, n_jobs=n_jobs
+        )
+
     # Final Pipeline
     steps = [feature_engineer, dropper, encoder]
     if isinstance(advanced_features, TransformerMixin):
         steps.append(advanced_features)
-    
+
     workflow = make_pipeline(*steps)
-    
+
     return workflow
-    
-    
-
-
-
-
-
-
-
-
-
-
