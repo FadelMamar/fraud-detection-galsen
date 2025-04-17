@@ -1115,7 +1115,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                 X[f"{feature}_cos"] = np.cos(2 * np.pi * X[feature] / max_val)
 
         if self.use_nystrom:
-            kernel_features = self._nystrom.transform(X[self._cyclical_features])
+            cols = list(self._cyclical_features) + ["TX_AMOUNT",]
+            kernel_features = self._nystrom.transform(X[cols])
             kernel_cols = [f"nystrom_{i}" for i in range(kernel_features.shape[1])]
             X[kernel_cols] = kernel_features
 
