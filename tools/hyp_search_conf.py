@@ -7,8 +7,7 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.feature_selection import (
     RFECV,
     SequentialFeatureSelector,
-    SelectKBest,
-)  # , f_classif, mutual_info_classif
+    SelectKBest, f_classif, mutual_info_classif)
 
 # from sklearn.model_selection import TimeSeriesSplit
 from sklearn.ensemble import (
@@ -270,32 +269,10 @@ combinedsamplers = [
 # %% models
 models = dict()
 
-learning_rate = [
-    0.0001,
-    0.0002,
-    0.0005,
-    0.001,
-    0.0022,
-    0.0046,
-    0.01,
-    0.0215,
-    0.0464,
-    0.1,
-]
-C = [
-    0.0001,
-    0.0008,
-    0.006,
-    0.0464,
-    0.3594,
-    2.7826,
-    21.5443,
-    166.8101,
-    1291.5497,
-    10000.0,
-]
-n_estimators = np.linspace(3, 200, 30).round().astype(int).tolist()
-max_depth = np.linspace(3, 30, 10).round().astype(int).tolist()
+learning_rate = np.logspace(-2,-1,10).tolist()
+C = np.logspace(-1,5,50).tolist()
+n_estimators = np.linspace(3, 40, 30).round().astype(int).tolist()
+max_depth = np.linspace(3, 30, 20).round().astype(int).tolist()
 
 models["logisticReg"] = dict(
     penalty=["l2"],
@@ -469,7 +446,7 @@ models["histGradientBoosting"] = dict(
     loss=[
         "log_loss",
     ],
-    max_iter=[100, 500, 1000, 10000],
+    max_iter=[25, 50, 100, 500, 1000, 10000],
     learning_rate=learning_rate,
     max_depth=[
         5,
@@ -498,20 +475,17 @@ models["histGradientBoosting"] = dict(
 
 models["xgboost"] = dict(
     n_estimators=n_estimators,
-    max_depth=[
-        5,
-        10,
-        15,
-    ],
-    learning_rate=np.logspace(-3, -1, num=10).tolist(),
-    booster=["gbtree", "dart"],
+    max_depth=max_depth,
+    learning_rate=learning_rate,
+    booster=["gbtree", "dart", "gblinear"],
     objective=["binary:hinge", "binary:logistic"],
-    scale_pos_weight=[1.0, 5.62, 31.62, 177.83, 1000.0],
-    subsample=[0.85, 1.0],
+    tree_method=['hist','approx'],
+    scale_pos_weight=np.logspace(-1, 5, num=50).tolist(),
+    subsample=np.linspace(0.5,1,num=10).round(3).tolist(),
     max_bin=[
         255,
     ],
-    colsample_bytree=[0.85, 1.0],
+    colsample_bytree=np.linspace(0.5,1,num=10).round(3).tolist(),
     gamma=[
         0.0,
     ],
@@ -522,7 +496,7 @@ models["xgboost"] = dict(
         0.0,
     ],
     eval_metric=[
-        "f1",
+        "aucpr",
     ],
     importance_type=[
         "gain",
@@ -536,18 +510,31 @@ models["xgboost"] = dict(
     max_cat_to_onehot=[
         9,
     ],
+    n_jobs=[None,],
+    device=['cpu',],
     model=XGBClassifier,
 )
 
-models["catboost"] = dict(iterations=[None, 100], model=CatBoostClassifier)
+models["catboost"] = dict(iterations=[None, 50, 100, 150],
+                          loss_function=['Logloss'],
+                          eval_metric=['PRAUC'],
+                          learning_rate=learning_rate,
+                          model=CatBoostClassifier
+                          )
 
 models["lgbm"] = dict(
-    iterations=[None, 100],
+    # iterations=[None, 100],
     n_estimators=n_estimators,
     objective=[
         "binary",
     ],
-    class_weight=["balanced", None],
+    class_weight=["balanced",],
+    force_col_wise=[True,],
+    min_data_in_leaf=np.linspace(50,1000,100).round().astype(int).tolist(),
+    max_depth=max_depth,
+    num_leaves=np.linspace(10,50,30).round().astype(int).tolist(),
+    verbosity=[-1],
+    n_jobs=[6],
     model=LGBMClassifier,
 )
 
@@ -557,8 +544,8 @@ models["baggingClassifier"] = dict(
         HistGradientBoostingClassifier(),
     ],
     n_estimators=n_estimators,
-    max_samples=np.linspace(0.3, 0.9, num=10).tolist(),
-    max_features=np.linspace(0.3, 0.9, num=10).tolist(),
+    max_samples=np.linspace(0.3, 0.95, num=10).round(3).tolist(),
+    max_features=np.linspace(0.3, 0.95, num=10).round(3).tolist(),
     #    bootstrap=[True, False],
     #    bootstrap_features=[True, False],
     model=BaggingClassifier,
@@ -628,6 +615,6 @@ scoring = [
 
 feature_selector["selectkbest"] = dict(
     selector=SelectKBest,
-    # score_func=['f_classif','mutual_info_classif'],
     k=np.linspace(10,80,num=50).round().astype(int).tolist(),
 )
+selectkbest_score_func=dict(f_classif=f_classif,mutual_info_classif=mutual_info_classif)

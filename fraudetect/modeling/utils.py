@@ -5,8 +5,6 @@ from sklearn.model_selection import (
 from copy import deepcopy
 from itertools import combinations
 from sklearn.model_selection._search import BaseSearchCV
-from hpsklearn import HyperoptEstimator
-from hyperopt import tpe
 import json, os, joblib, traceback
 import numpy as np
 import pandas as pd
@@ -121,15 +119,9 @@ def hyperparameter_tuning(
         )
         param_dist = dict()
         for k, v in params_config.items():
-            if isinstance(v, Iterable):
+            if isinstance(v, Iterable) and len(v)>1:
                 param_dist[k] = optuna.distributions.CategoricalDistribution(v)
-            else:
-                param_dist[k] = optuna.distributions.CategoricalDistribution(
-                    [
-                        v,
-                    ]
-                )
-
+        
         search_engine = optuna.integration.OptunaSearchCV(
             model,
             param_distributions=param_dist,
@@ -138,7 +130,7 @@ def hyperparameter_tuning(
             n_jobs=n_jobs,
             study=study,
             scoring=scoring,
-            # error_score='raise',
+            error_score='raise',
             max_iter=300,
             timeout=60 * 3,
             n_trials=n_iter,
@@ -146,21 +138,6 @@ def hyperparameter_tuning(
             verbose=verbose,
         )
 
-    # elif method == "hyperopt":
-    #     loss_fn = lambda y_true, y_pred: 1.0 - f1_score(
-    #         y_true=y_true,
-    #         y_pred=y_pred,
-    #         pos_label=1,
-    #         zero_division=1,
-    #     )
-    #     search_engine = HyperoptEstimator(
-    #         classifier=model,
-    #         algo=tpe.suggest,
-    #         max_evals=n_iter,
-    #         loss_fn=loss_fn,
-    #         n_jobs=n_jobs,
-    #         trial_timeout=60 * 2,
-    #     )
     else:
         raise ValueError(
             "Invalid method. Choose either 'gridsearch',hyperopt, 'optuna' or 'random'."
@@ -230,43 +207,6 @@ def _tune_models_hyp(
     return search_engine  # {model_name: search_engine}  #
 
 
-def _run(
-    args: Arguments,
-    classifier,
-    params_config: dict,
-    X_train,
-    y_train,
-    save_path: str = None,
-    verbose=0,
-) -> BaseSearchCV:
-    assert isinstance(args.scoring, str), "It should be a string."
-
-    cv = TimeSeriesSplit(n_splits=args.n_splits, gap=args.cv_gap)
-
-    search_engine = hyperparameter_tuning(
-        cv=cv,
-        params_config=params_config,
-        X_train=X_train,
-        y_train=y_train,
-        model=classifier,
-        scoring=args.scoring,
-        method=args.cv_method,  # other, gridsearch
-        verbose=verbose,
-        n_iter=args.cv_n_iter,
-        n_jobs=args.n_jobs,
-    )
-
-    if verbose:
-        score = search_engine.best_score_
-        print(f"mean {args.scoring} score for best_estimator: {score:.4f}")
-        # print("best params: ", search_engine.best_params_)
-
-    # save results
-    if save_path:
-        joblib.dump(search_engine, save_path)
-
-    return search_engine
-
 
 class Tuner(object):
     def __init__(
@@ -293,25 +233,27 @@ class Tuner(object):
         self.cat_encoding_kwards = cat_encoding_kwards
         self.selector = None
 
-        self.raw_data_train = load_data(args.data_path)
-        # self.X_train = raw_data_train #.drop(columns=['TX_FRAUD'])
-        self.y_train = self.raw_data_train["TX_FRAUD"]
+        raw_data_train = load_data(args.data_path)
+        self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
+        self.y_train = raw_data_train["TX_FRAUD"]
 
         self.best_score = 0.0
         self.best_records = dict()
         self.ckpt_filename = os.path.join(
             args.work_dir, args.study_name + "_best-run.joblib"
         )
+        
+        assert isinstance(self.args.scoring, str), "It should be a string."
 
     def sample_cfg_optuna(self, trial, name: str, config: dict):
-        _cfg = deepcopy(config)
+        
+        cfg = dict()
 
-        for k in _cfg.keys():
-            if not isinstance(_cfg[k], Iterable):
-                continue
-            _cfg[k] = trial.suggest_categorical(name + "__" + k, _cfg[k])
+        for k,v in config.items():
+            if isinstance(v, Iterable) and len(v)>1:
+                cfg[k] = trial.suggest_categorical(f"{name}__{k}", v)
 
-        return _cfg
+        return cfg
 
     def save_checkpoint(self, model_name: str, score: float, results: BaseSearchCV):
         if score >= self.best_score:
@@ -327,6 +269,42 @@ class Tuner(object):
             self.HYP_CONFIGS = import_from_path("hyp_search_conf", path_conf)
         except:
             self.HYP_CONFIGS = import_from_path("hyp_search_conf", path_conf)
+    
+    def _run(
+        self,
+        classifier,
+        params_config: dict,
+        X_train,
+        y_train,
+        save_path: str = None,
+        verbose=0,
+    ) -> BaseSearchCV:
+        
+        
+        cv = TimeSeriesSplit(n_splits=self.args.n_splits, gap=self.args.cv_gap)
+
+        search_engine = hyperparameter_tuning(
+            cv=cv,
+            params_config=params_config,
+            X_train=X_train,
+            y_train=y_train,
+            model=classifier,
+            scoring=self.args.scoring,
+            method=self.args.cv_method,
+            verbose=self.verbose,
+            n_iter=self.args.cv_n_iter,
+            n_jobs=self.args.n_jobs,
+        )
+
+        if self.verbose:
+            score = search_engine.best_score_
+            print(f"mean {self.args.scoring} score for best_estimator: {score:.4f}")
+
+        # save results
+        if save_path:
+            joblib.dump(search_engine, save_path)
+
+        return search_engine
 
     def __call__(self, trial):
         self.count_iter += 1
@@ -343,7 +321,22 @@ class Tuner(object):
         model, models_config = get_model(model_name, self.HYP_CONFIGS.models)
         model = instantiate_model(
             model, **sample_model_cfg(models_config)
-        )  # instantiate with
+        )
+        # set handle categorical variables
+        cat_encoding_method = self.args.cat_encoding_method
+        if model_name == "histGradientBoosting":
+            model.set_params(categorical_features="from_dtype")
+        elif model_name == "catboost":
+            cat_encoding_method = 'catboost'
+        elif model_name == 'xgboost':
+            model.set_params(enable_categorical=True)
+        
+        if str(self.args.cat_encoding_method) == 'None':
+            if model_name not in ['catboost','xgboost','histGradientBoosting','lgbm']:
+                # raise ValueError("The provided model does not support un-encoded categorical variables")
+                cat_encoding_method = 'catboost'
+                print("The provided model does not support un-encoded categorical variables. Using catboost encoder.")
+            
 
         # PCA
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
@@ -380,6 +373,7 @@ class Tuner(object):
         )
         selector_cfg = {}
         feature_selector_name = None
+        k_score_func = None
         if do_feature_selection:
             feature_selector_name = trial.suggest_categorical(
                 "feature_selector_name", self.HYP_CONFIGS.feature_selector.keys()
@@ -389,10 +383,10 @@ class Tuner(object):
                 feature_selector_name,
                 self.HYP_CONFIGS.feature_selector[feature_selector_name],
             )
-            _, selector_cfg = get_feature_selector(
-                name=feature_selector_name, config={feature_selector_name: selector_cfg}
-            )
-        
+            if feature_selector_name == 'selectkbest':
+                k_score_func = trial.suggest_categorical('selectkbest_score_func', ['f_classif','mutual_info_classif'])
+                k_score_func = self.HYP_CONFIGS.selectkbest_score_func[k_score_func]
+                    
         # advanced features
         advanced_transformation = dict(add_fft=self.args.add_fft,
                 add_seasonal_features=self.args.add_seasonal_features,
@@ -408,8 +402,10 @@ class Tuner(object):
         feature_select_estimator = DecisionTreeClassifier(
             max_depth=15, max_features="sqrt", random_state=41
         )
-
-        data_processor = load_workflow(
+        
+       
+        classifier = load_workflow(
+            classifier=model,
             cols_to_drop=self.args.cols_to_drop,
             scoring=selector_cfg.get("scoring", "f1"),
             feature_select_estimator=feature_select_estimator,
@@ -423,35 +419,32 @@ class Tuner(object):
             feature_selector_name=feature_selector_name,
             seq_n_features_to_select=selector_cfg.get("n_features_to_select", 3),
             windows_size_in_days=self.args.windows_size_in_days,
-            cat_encoding_method=self.args.cat_encoding_method,
+            cat_encoding_method=cat_encoding_method,
+            cat_encoding_kwargs=self.cat_encoding_kwards,
             imputer_n_neighbors=9,
             n_clusters=8,
             top_k_best=selector_cfg.get("k", 50),
-            # k_score_func=selector_cfg.get('score_func',10),
+            k_score_func=k_score_func,
             do_pca=do_pca,
             verbose=self.verbose,
             n_jobs=self.args.n_jobs,
             **advanced_transformation
         )
+        
+        
 
-        if model_name == "histGradientBoosting":
-            model.set_params(categorical_features="from_dtype")
-        elif model_name == "catboost":
-            raise NotImplementedError
-            # model.set_params(cat_features=[])
-            # see https://catboost.ai/docs/en/concepts/python-reference_catboostclassifier#cat_features
-
-        classifier = Pipeline(
-            steps=[("data_processor", data_processor), ("model", model)]
-        )
+        # classifier = Pipeline(
+        #     steps=[("data_processor", data_processor), ("model", model)]
+        # )
         params_config = {
-            f"model__{k}": v for k, v in models_config.items() if len(v) > 1
+            f"model__{k}": v
+            for k, v in models_config.items()
+            if len(v) > 1 and isinstance(v, Iterable)
         }
 
-        X = self.raw_data_train.copy()
+        X = self.X_train.copy()
         y = self.y_train.copy()
-        results = _run(
-            args=self.args,
+        results = self._run(
             classifier=classifier,
             params_config=params_config,
             X_train=X,

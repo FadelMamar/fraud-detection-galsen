@@ -1,6 +1,8 @@
 from .preprocessing import (
     FraudFeatureEngineer,
     FeatureEncoding,
+    DimensionReduction,
+    ToDataframe,
     load_feature_selector,
     load_cat_encoding,
     load_transforms_pyod,

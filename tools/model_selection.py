@@ -12,12 +12,14 @@ import os
 import joblib
 import json
 import optuna
+import mlflow
 from datetime import datetime, date
 from optuna.samplers import TPESampler
 from fraudetect.config import (
     COLUMNS_TO_DROP,
     Arguments,
 )
+from optuna.integration.mlflow import MLflowCallback
 
 from fraudetect.modeling.utils import Tuner
 
@@ -37,9 +39,9 @@ if __name__ == "__main__":
         # "balancedRandomForest",
         # "gradientBoosting",
         "histGradientBoosting",
-        # "catboost",
-        # 'lgbm',
-        # "xgboost",
+        "catboost",
+        'lgbm',
+        "xgboost",
     )
 
     current_time = datetime.now().strftime("%H-%M")
@@ -53,8 +55,8 @@ if __name__ == "__main__":
     args.scoring = "f1"  # 'f1', precision
     args.cv_method = "optuna"  # optuna random
     args.cv_gap = 1051 * 5
-    args.n_splits = 3  #
-    args.n_jobs = 4
+    args.n_splits = 5  #
+    args.n_jobs = 1 # for hyp tuning
     args.delta_train = 50
     args.delta_delay = 7
     args.delta_test = 20
@@ -74,7 +76,7 @@ if __name__ == "__main__":
     args.use_sincos=True
     args.use_spline=True 
 
-    args.disable_pyod_outliers = False
+    args.disable_pyod_outliers = True
     args.pyod_detectors = [
         "abod",
         "cblof",
@@ -104,8 +106,14 @@ if __name__ == "__main__":
     args.cat_encoding_base_n = 4  # if cat_encoding_method=base_n
     args.windows_size_in_days = (1, 7, 30)
     cat_encoding_kwards = dict(
-        n_components=args.cat_encoding_hash_n_components
-    )  # used for 'catboost', 'hashing'
+        hash_n_components=args.cat_encoding_hash_n_components,
+        handle_missing="value",
+        return_df=True,
+        hash_method="md5",
+        drop_invariant=False,
+        handle_unknown="value",
+        base=args.cat_encoding_base_n,
+    ) 
 
     # for debugging
     # demo(args=args)
@@ -115,6 +123,7 @@ if __name__ == "__main__":
     args.work_dir = str(args.work_dir)  # for json serialization
 
     # using optuna
+    
     study = optuna.create_study(
         direction="maximize",
         sampler=TPESampler(multivariate=True, group=True),
@@ -130,15 +139,21 @@ if __name__ == "__main__":
     objective_optuna = Tuner(
         args=args, verbose=0, cat_encoding_kwards=cat_encoding_kwards
     )
-
     objective_optuna.load_hyp_conf("./hyp_search_conf.py")
 
+    mlflow.set_tracking_uri(uri="http://localhost:5000")
+    exp_id = mlflow.create_experiment(name=args.study_name,)
+    mlflow.set_experiment(experiment_id=exp_id)
+    mlflc = MLflowCallback(metric_name=args.scoring,
+                           create_experiment=False,
+                           )
     study.optimize(
         objective_optuna,
         n_trials=args.optuna_n_trials,
         n_jobs=1,
         show_progress_bar=True,
         timeout=60 * 60 * 3,
+        callbacks=[mlflc],
     )
     # print(study.best_trial)
 

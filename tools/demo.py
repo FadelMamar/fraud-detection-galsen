@@ -234,7 +234,7 @@ COLUMNS_TO_DROP = [
 # %% Preprocessing pipeline
 from pathlib import Path
 from fraudetect.dataset import load_data
-from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
+from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding,ToDataframe,DimensionReduction
 from fraudetect.preprocessing.preprocessing import (
     load_cols_transformer,
     fit_outliers_detectors,
@@ -243,7 +243,6 @@ from fraudetect.preprocessing.preprocessing import (
     Pipeline,
     FeatureUnion,
     OutlierDetector,
-    AdvancedFeatures,
 )
 from fraudetect import import_from_path, sample_cfg
 
@@ -258,6 +257,7 @@ from joblib import Memory
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import TimeSeriesSplit
 from collections.abc import Iterable
+from typing import Sequence
 
 CURDIR = Path(__file__).parent
 cfg_path = CURDIR / "hyp_search_conf.py"
@@ -283,115 +283,43 @@ COLUMNS_TO_DROP = [
 
 y_train = raw_data_train["TX_FRAUD"]
 
-# dropper = ColumnDropper(cols_to_drop=COLUMNS_TO_DROP)
 
+# model_list = list()
+# names = ["cblof", "iforest"]
+# names = sorted(names)
+# outliers_det_configs = dict()
 
-# v2
-# encoder_2 = FeatureEncoding(add_imputer=False,
-#                             cat_encoding_method='binary',
-#                             imputer_n_neighbors=9,
-#                             n_jobs=4
-#                             )
-# X_ = encoder_2.fit_transform(X=raw_data_train)
+# for name in names:
+#     detector, cfg = get_detector(name=name, config=CONFIGS.outliers_detectors)
+#     cfg = sample_cfg(cfg)
+#     detector = instantiate_detector(detector, cfg)
+#     model_list.append(detector)
 
+#     cfg["detector"] = CONFIGS.outliers_detectors[name]["detector"]
+#     outliers_det_configs[name] = cfg
 
-# v3
-# pipe = Pipeline(steps=[('col_dropper',dropper), ('col_encoder',encoder_2)])
-# X_ = pipe.fit_transform(X=raw_data_train)
-
-# v4
-# feature_engineer = FraudFeatureEngineer(windows_size_in_days=[1,7,30],
-#                                          uid_cols=[None,],
-#                                          session_gap_minutes=60*3,
-#                                          n_clusters=8
-#                                         )
-# X_ = feature_engineer.fit_transform(X=raw_data_train)
-
-
-# v5
-# pipe2 = Pipeline(steps=[('feature_engineer',feature_engineer),
-#                        ('col_dropper',dropper),
-#                        ('col_encoder',encoder_2)
-#                 ]
-#             )
-
-
-# X_all = pd.concat([raw_data_train,raw_data_pred],axis=0).reset_index(level=0,drop=True)
-
-# X_all = pipe2.fit_transform(X=X_all,y=None)
-# X_train = X_all[:len(raw_data_train),:]
-
-# X_pred = pipe2.transform(X=raw_data_pred)
-
-
-model_list = list()
-names = ["cblof", "iforest"]
-names = sorted(names)
-outliers_det_configs = dict()
-
-for name in names:
-    detector, cfg = get_detector(name=name, config=CONFIGS.outliers_detectors)
-    cfg = sample_cfg(cfg)
-    detector = instantiate_detector(detector, cfg)
-    model_list.append(detector)
-
-    cfg["detector"] = CONFIGS.outliers_detectors[name]["detector"]
-    outliers_det_configs[name] = cfg
-
-
-# pyod_det = OutlierDetector(detector_list=model_list)
-# det_scores = pyod_det.fit_transform(X=X_train, y=None)
-
-
-# Feature selection
-estimator = DecisionTreeClassifier(max_depth=15, max_features="sqrt", random_state=41)
-
-# feature_selector = AdvancedFeatures(verbose=True,
-#                                     estimator=estimator,
-#                                     do_pca=True,
-#                                     top_k_best=10,
-#                                     pca_n_components=20,
-#                                     feature_selector_name="selectkbest"
-#                                     )
-# X_selected = feature_selector.fit_transform(X=X_train,y=y_train)
-
-# concatenator = FeatureUnion(transformer_list=[('pyod_det',pyod_det), ('feature_selector',feature_selector)],
-#                             n_jobs=2
-#                             )
-# X_pyod = concatenator.fit_transform(X=X_train,y=y_train)
 
 # load model
-model, model_cfgs = get_model("histGradientBoosting", CONFIGS.models)
+# "mlp",
+# "decisionTree",
+# "logisticReg",
+# "svc",
+# "randomForest",
+# "balancedRandomForest",
+# "gradientBoosting",
+# "histGradientBoosting",
+# "catboost",
+# 'lgbm',
+model_name = 'catboost' #
+model, model_cfgs = get_model(model_name, CONFIGS.models)
 model_cfg = sample_model_cfg(model_cfgs)
 model = instantiate_model(model, **model_cfg)
 
-# Create a temporary folder to store the transformers of the pipeline
-# location = "cachedir"
-# memory = Memory(location=location, verbose=1)
 
-# Final Pipeline
-# workflow = Pipeline(steps=[('feature_engineer',feature_engineer),
-#                        ('col_dropper',dropper),
-#                        ('col_encoder',encoder_2),
-#                        # ('feature_selector',feature_selector),
-#                        ('concat',concatenator),
-#                        # ('model', model),
-#                        ],
-#                     # memory=memory
-#             )
-
-# X_processed = workflow.fit_transform(X=raw_data_train, y=y_train)
-
-# score = workflow.fit(X=raw_data_train, y=y_train).score(X=raw_data_train,y=y_train)
-
-# Delete the temporary cache before exiting
-# memory.clear(warn=False)
-# rmtree(location)
-
-
-data_processor = load_workflow(
+workflow = load_workflow(
+    classifier=model,
     cols_to_drop=COLUMNS_TO_DROP,
-    feature_select_estimator=estimator,
+    feature_select_estimator=DecisionTreeClassifier(max_depth=15, max_features="sqrt", random_state=41),
     pca_n_components=80,
     detector_list=None,  # model_list,
     session_gap_minutes=60 * 3,
@@ -399,13 +327,13 @@ data_processor = load_workflow(
         None,
     ],
     add_imputer=False,
-    feature_selector_name=None,  # "selectkbest",
+    feature_selector_name='selectkbest',  # "selectkbest",
+    top_k_best=50,
     windows_size_in_days=[1, 7, 30],
-    cat_encoding_method=None,  # TODO try None
+    cat_encoding_method='catboost',  # TODO try None
     imputer_n_neighbors=9,
     n_clusters=8,
-    top_k_best=10,
-    do_pca=False,
+    do_pca=True,
     verbose=True,
     n_jobs=1,
     add_fft=True,
@@ -419,57 +347,38 @@ data_processor = load_workflow(
     spline_n_knots=6,
 )
 
-# data_processor = load_workflow(
-#                           cols_to_drop=self.args.cols_to_drop,
-#                           scoring=selector_cfg.get('scoring','f1'),
-#                           feature_select_estimator=feature_select_estimator,
-#                           rfe_step=selector_cfg.get('step',3),
-#                           pca_n_components=20,
-#                           detector_list=detector_list,
-#                           cv_gap=self.args.cv_gap,
-#                           n_splits=self.args.n_splits,
-#                           session_gap_minutes=self.args.session_gap_minutes,
-#                           uid_cols=self.args.concat_features,
-#                           feature_selector_name=feature_selector_name,
-#                           seq_n_features_to_select=selector_cfg.get('n_features_to_select',3),
-#                           windows_size_in_days=self.args.windows_size_in_days,
-#                           cat_encoding_method=self.args.cat_encoding_method,
-#                           imputer_n_neighbors=9,
-#                           n_clusters=8,
-#                           top_k_best=selector_cfg.get('k',10),
-#                           # k_score_func=selector_cfg.get('score_func',10),
-#                           do_pca=do_pca,
-#                           verbose=self.verbose,
-#                           n_jobs=self.args.n_jobs
-#                           )
 
-# y_train = raw_data_train['TX_FRAUD']
-# X_train = data_processor.fit_transform(X=raw_data_train, y=y_train) #.score(X=raw_data_train,y=y_train)
+y_train = raw_data_train['TX_FRAUD']
+X_train = raw_data_train.drop(columns=['TX_FRAUD'])
+
+print("score: ",workflow.fit(X=X_train,y=y_train).score(X=X_train,y=y_train))
+# workflow.predict(X_train)
+
+# X_train_processed = data_processor.fit_transform(X=X_train, y=y_train) #.score(X=raw_data_train,y=y_train)
 # X_pred = data_processor.transform(raw_data_pred)
 
 # print('X_train.shape: ',X_train.shape)
 # print('X_pred.shape: ',X_pred.shape)
 
-# print('Num NaN train', (X_train==np.nan).sum())
+# print('Num NaN train', (X_train_processed==np.nan).sum())
 
 
-model = model.set_params(categorical_features="from_dtype")
+# model.fit(X_train_processed,y_train)
 
-classifier = Pipeline(steps=[("data_processor", data_processor), ("model", model)])
+# classifier = Pipeline(steps=[("data_processor", data_processor),('to_df',ToDataframe()), ("model", model)])
 
-# classifier = classifier.set_params(model__categorical_features='from_dtype')
-
-# classifier.fit(raw_data_train, y=y_train)
+# classifier.fit(X=X_train, y=y_train)
 # score = classifier.score(X=raw_data_train,y=y_train)
 
 
-# params_config = {f"model__{k}":v for k,v in model_cfgs.items() if len(v)>1 and isinstance(v, Iterable)}
+params_config = {f"model__{k}":v for k,v in model_cfgs.items() if len(v)>1 and isinstance(v, Iterable)}
+
 
 # search_engine = RandomizedSearchCV(
-#     classifier,
+#     workflow,
 #     param_distributions=params_config,
 #     scoring='f1',
-#     cv=TimeSeriesSplit(n_splits=5,gap=5000),
+#     cv=TimeSeriesSplit(n_splits=4,gap=5000),
 #     refit=True,
 #     n_jobs=1,
 #     n_iter=2,
@@ -477,44 +386,37 @@ classifier = Pipeline(steps=[("data_processor", data_processor), ("model", model
 #     verbose=True,
 # )
 
-import optuna
-from optuna.samplers import TPESampler
-from collections.abc import Iterable
+# import optuna
+# from optuna.samplers import TPESampler
+# from collections.abc import Iterable
 
-study = optuna.create_study(
-    direction="maximize",
-    sampler=TPESampler(multivariate=True, group=True),
-    load_if_exists=True,
-)
+# study = optuna.create_study(
+#     direction="maximize",
+#     sampler=TPESampler(multivariate=True, group=True),
+#     load_if_exists=True,
+# )
 
-cfg = dict()
-params_config = {
-    f"model__{k}": v
-    for k, v in model_cfgs.items()
-    if len(v) > 1 and isinstance(v, Iterable)
-}
-for k, v in params_config.items():
-    if isinstance(v, Iterable):
-        cfg[k] = optuna.distributions.CategoricalDistribution(v)
-    else:
-        cfg[k] = optuna.distributions.CategoricalDistribution([v, v])
+# cfg = dict()
+# for k, v in params_config.items():
+#     if isinstance(v, Sequence) and len(v)>1:
+#         cfg[k] = optuna.distributions.CategoricalDistribution(v)
 
-search_engine = optuna.integration.OptunaSearchCV(
-    classifier,
-    param_distributions=cfg,
-    cv=TimeSeriesSplit(n_splits=5, gap=5000),
-    refit=True,
-    n_jobs=1,
-    study=study,
-    scoring="f1",
-    error_score="raise",
-    max_iter=300,
-    timeout=60 * 3,
-    n_trials=5,
-    # random_state=41,
-    verbose=True,
-)
+# search_engine = optuna.integration.OptunaSearchCV(
+#     workflow,
+#     param_distributions=cfg,
+#     cv=TimeSeriesSplit(n_splits=5, gap=5000),
+#     refit=True,
+#     n_jobs=1,
+#     study=study,
+#     scoring="f1",
+#     error_score="raise",
+#     max_iter=300,
+#     timeout=60 * 3,
+#     n_trials=5,
+#     # random_state=41,
+#     verbose=True,
+# )
 
-search_engine.fit(X=raw_data_train, y=y_train)
+# search_engine.fit(X=X_train, y=y_train)
 
 # print(search_engine.best_estimator_)

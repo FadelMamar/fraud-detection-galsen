@@ -289,28 +289,70 @@ class ColumnDropper(TransformerMixin, BaseEstimator):
     def fit_transform(self, X, y=None, **fit_params):
         self.fit(X, y, **fit_params)
         return self.transform(X=X, y=y)
+    
+    def check_dataframe(self,X:pd.DataFrame):
+        assert isinstance(X, pd.DataFrame), "provide a DataFrame"
+        assert "TX_FRAUD" not in X.columns, "Please drop TX_FRAUD column"
+        
+    def get_feature_names_out(self,input_features=None):
+        return self._cols
 
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X: pd.DataFrame, y=None, **fit_params):
-        assert isinstance(X, pd.DataFrame), "provide a DataFrame"
-
-        self.feature_names_in_ = [col for col in X.columns if col != "TX_FRAUD"]
+        
+        self.check_dataframe(X=X)
+        
+        self.feature_names_in_ = X.columns
         self.n_features_in_ = len(self.feature_names_in_)
         self.is_fitted_ = True
 
         return self
 
     def transform(self, X: pd.DataFrame, y=None):
-        assert isinstance(X, pd.DataFrame), "provide a DataFrame"
+        
+        self.check_dataframe(X=X)
 
         df = X.copy()
 
         if self.cols_to_drop is not None:
             df.drop(columns=self.cols_to_drop, inplace=True)
+        
+        self._cols = df.columns.tolist()
 
-        if "TX_FRAUD" in df.columns:
-            df = df.drop(columns=["TX_FRAUD"])
+        return df
 
+
+class ToDataframe(TransformerMixin, BaseEstimator):
+    _parameter_constraints = {}
+    
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X, y, **fit_params)
+        return self.transform(X=X, y=y)
+    
+    @_fit_context(prefer_skip_nested_validation=True)
+    def fit(self, X, y=None, **fit_params):
+        
+        if isinstance(X, pd.DataFrame):
+            self._cols = X.columns
+        else:
+            self._cols = [f"col_{i}" for i in range(X.shape[1])]
+        
+        self.n_features_in_ = X.shape[1]
+        self.is_fitted_ = True
+
+        return self
+    
+    # def get_feature_names_out(self,input_features=None):
+    #     return self._cols
+
+    def transform(self, X, y=None):
+        
+        df = pd.DataFrame(data=X,columns=self._cols).convert_dtypes()
+        for col in df.select_dtypes(include=['object','string']):
+            df[col] = df[col].astype('category')
+        
+        self.get_feature_names_out = df.columns.tolist()
+            
         return df
 
 
@@ -336,18 +378,14 @@ class OutlierDetector(TransformerMixin, BaseEstimator):
         return self.transform(X=X, y=y)
 
     @_fit_context(prefer_skip_nested_validation=True)
-    def fit(self, X: pd.DataFrame, y=None, **fit_params):
+    def fit(self, X, y=None, **fit_params):
         assert all([det is not None for det in self.detector_list]), (
             "Provide detector_list"
         )
 
         validate_data(self, X=X, y=y)
 
-        # print("<Start fitting-outliers-det-pyod/>")
-        # Done by the main thread > avoid race conditions in transform
-        # _ = Parallel(n_jobs=1)([delayed(fit_detector)(det,X) for det in self.detector_list])
         [det.fit(X) for det in self.detector_list]
-        # print("</End fitting-outliers-det-pyod>")
 
         self.is_fitted_ = True
 
@@ -356,7 +394,6 @@ class OutlierDetector(TransformerMixin, BaseEstimator):
     def transform(self, X, y=None):
         validate_data(self, X=X, reset=False)
 
-        # scores = Parallel(n_jobs=self.n_jobs)([delayed(compute_score)(det,X) for det in self.detector_list])
         scores = [
             det.decision_function(X).reshape((-1, 1)) for det in self.detector_list
         ]
@@ -369,7 +406,7 @@ class OutlierDetector(TransformerMixin, BaseEstimator):
         return scores
 
 
-class AdvancedFeatures(TransformerMixin, BaseEstimator):
+class DimensionReduction(TransformerMixin, BaseEstimator):
     _parameter_constraints = {
         "feature_selector_name": [str],
         "estimator": [BaseEstimator],
@@ -423,7 +460,7 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
     def fit_transform(self, X, y=None, **fit_params):
         self.fit(X=X, y=y, **fit_params)
         return self.transform(X=X, y=y)
-
+              
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X, y=None, **fit_params):
         assert any([self.do_pca, self.feature_selector_name != "None"]), (
@@ -445,14 +482,14 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
             )
             X = self._pca_transform.fit_transform(X=X, y=y)
 
-        if self.feature_selector_name != "None":
+        if str(self.feature_selector_name) != "None":
             cv = TimeSeriesSplit(n_splits=self.n_splits, gap=self.cv_gap)
             self._selector = load_feature_selector(
                 n_features_to_select=self.n_features_to_select,
                 cv=cv,
                 estimator=self.estimator,
                 name=self.feature_selector_name,
-                top_k_best=min(self.top_k_best,X.shape[1]),
+                top_k_best=min(self.top_k_best, X.shape[1]//2),
                 k_score_func=self.k_score_func,
                 rfe_step=self.rfe_step,
                 scoring=self.scoring,
@@ -466,6 +503,7 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
         return self
 
     def transform(self, X, y=None):
+                
         validate_data(self, X=X, reset=False)
 
         if self._pca_transform is not None:
@@ -473,7 +511,7 @@ class AdvancedFeatures(TransformerMixin, BaseEstimator):
 
         if self._selector is not None:
             X = self._selector.transform(X=X)
-
+        
         return X
 
 
@@ -518,14 +556,14 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         onehot_encoder = OneHotEncoder(handle_unknown="ignore")
 
         # numeric columns
-        numeric_cols = df.select_dtypes(include=["number"]).columns
+        # numeric_cols =  df.select_dtypes(include=["number"]).columns
         # numeric_cols = [col for col in numeric_cols]
-        # numeric_cols = make_column_selector(pattern='',dtype_include=['number'])
-        transformers = [("scaled", scaler, numeric_cols)]
+        numeric_cols = make_column_selector(dtype_include=['number'])
+        transformers = [("scaled_numeric", scaler, numeric_cols)]
 
         # categorical columns
         if str(self.cat_encoding_method) == "None":
-            print("Categorical columns will not be encoded by ColumnTransformer.")
+            print("Categorical columns will  pass-through.")
 
         else:
             cols = df.select_dtypes(include=["object", "string", "category"]).columns
@@ -583,7 +621,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
         X = pd.DataFrame(data=X, columns=self.get_feature_names_out).convert_dtypes()
 
-        cat_cols = X.select_dtypes(include=["object", "string", "category"]).columns
+        cat_cols = X.select_dtypes(include=["object", "string"]).columns
         for col in cat_cols:
             X[col] = X[col].astype("category")
 
@@ -676,11 +714,14 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         assert X.isna().sum().sum() < 1, "Found NaN values"
 
     @_fit_context(prefer_skip_nested_validation=True)
-    def fit(self, X: pd.DataFrame, y=None, **fit_params):
+    def fit(self, X: pd.DataFrame, y, **fit_params):
         self.check_dataframe(X=X)
+        
 
         # reset index > causes issues when doing cross-val
         df = X.copy().reset_index(drop=True)
+        df['TX_FRAUD'] = pd.Series(y)
+        
         if self.add_fraud_rate_features:
             self._product_fraud_rate = (
                 df.groupby("ProductId")["TX_FRAUD"].mean().rename("ProductFraudRate")
@@ -731,7 +772,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         # reset index > causes issues when doing cross-val
         df = X.copy().reset_index(drop=True)
 
-        df = df.sort_values(by=["TX_DATETIME"])
+        # df = df.sort_values(by=["TX_DATETIME"])
 
         if all([col is not None for col in self.uid_cols]):
             df = self._create_unique_identifier(df)
@@ -762,6 +803,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         #     df = self._add_customer_clusters(df)
 
         df = self._cleanup(df)
+        
+        self.get_feature_names_out = df.columns.tolist()
 
         self.check_dataframe(df)
 
@@ -770,6 +813,9 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
     def fit_transform(self, X, y=None, **fit_params):
         self.fit(X=X, y=y, **fit_params)
         return self.transform(X=X, y=y)
+    
+    # def get_feature_names_out(self,input_features=None):
+    #     return self._cols
 
     # ---------- Private Helper Methods ----------
     def _create_unique_identifier(self, df: pd.DataFrame):
@@ -839,21 +885,19 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             )
 
             df[col + "_Txn1hCount"] = (
-                df.sort_values(by=["TX_DATETIME"])
+                df
                 .set_index("TX_DATETIME")
                 .groupby(col)["TRANSACTION_ID"]
-                .rolling("1h")
-                .count()
+                .transform(lambda x: x.rolling('1h').count())
                 .reset_index(drop=True)
             )
 
             for day in self.windows_size_in_days:
                 df[f"{col}_AvgAmount_{day}day"] = (
-                    df.sort_values(by=["TX_DATETIME"])
+                    df
                     .set_index("TX_DATETIME")
                     .groupby(col)["TX_AMOUNT"]
-                    .rolling(window=f"{day}d", min_periods=1)
-                    .mean()
+                    .transform(lambda x: x.rolling(window=f"{day}d", min_periods=1).mean())
                     .reset_index(drop=True)
                 )
 
@@ -981,9 +1025,10 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         for col in self.behavioral_drift_cols:
             df[f"{col}_MovingAvg5"] = (
                 df.groupby(col)["TX_AMOUNT"]
-                .rolling(window=5, min_periods=1)
-                .mean()
-                .reset_index(level=0, drop=True)
+                .transform(lambda x: x.rolling(window=5, min_periods=1).mean())
+                # .rolling(window=5, min_periods=1)
+                # .mean()
+                .reset_index(drop=True)
             )
             long_term_avg = (
                 df.groupby(col)["TX_AMOUNT"]
@@ -1061,8 +1106,11 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                 X[spline_cols] = transformed
 
         if self.use_sincos:
+            max_vals = {'hour':24,
+                        'dayofweek':6
+                        }
             for feature in self._cyclical_features:
-                max_val = X[feature].max()
+                max_val = max_vals[str(feature).lower()]
                 X[f"{feature}_sin"] = np.sin(2 * np.pi * X[feature] / max_val)
                 X[f"{feature}_cos"] = np.cos(2 * np.pi * X[feature] / max_val)
 
@@ -1171,7 +1219,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
 
 def load_workflow(
-    cols_to_drop,
+        classifier=None,
+    cols_to_drop=None,
     pca_n_components=20,
     detector_list=None,
     n_splits=5,
@@ -1188,9 +1237,11 @@ def load_workflow(
     ],
     feature_select_estimator=DecisionTreeClassifier(),
     feature_selector_name: str | None = "selectkbest",
+    top_k_best=10,
     seq_n_features_to_select=3,
     windows_size_in_days=[1, 7, 30],
     cat_encoding_method: str | None = "binary",
+    cat_encoding_kwargs={},
     cluster_on_feature="CUSTOMER_ID",
     imputer_n_neighbors=9,
     add_fft=False,
@@ -1205,7 +1256,6 @@ def load_workflow(
     add_imputer=False,
     rfe_step=3,
     n_clusters=8,
-    top_k_best=10,
     k_score_func=mutual_info_classif,
     do_pca=True,
     verbose=False,
@@ -1231,23 +1281,30 @@ def load_workflow(
         cluster_on_feature=cluster_on_feature,
         uid_col_name="CustomerUID",  # name given to uid cols created from interactions of uid_cols
     )
+    
+    workflow_steps = [('feature_engineer', feature_engineer)]
 
     # drop columns
-    dropper = ColumnDropper(cols_to_drop=cols_to_drop)
-
+    if cols_to_drop is not None:
+        dropper = ColumnDropper(cols_to_drop=cols_to_drop)
+        workflow_steps.append(('dropper',dropper))
+    
     # encodes features and impute missing values
     encoder = FeatureEncoding(
         add_imputer=add_imputer,
         cat_encoding_method=str(cat_encoding_method),
+        cat_encoding_kwargs=cat_encoding_kwargs,
         imputer_n_neighbors=imputer_n_neighbors,
         n_jobs=n_jobs,
         onehot_threshold=onehot_threshold,
     )
-
+    
+    workflow_steps.append(('encoder',encoder))
+    
     # get advanced features -> PCA, feature selection + outliers scores
     advanced_features = []
     if (feature_selector_name is not None) or do_pca:
-        enhancer = AdvancedFeatures(
+        dim_reduce = DimensionReduction(
             verbose=bool(verbose),
             estimator=feature_select_estimator,
             do_pca=do_pca,
@@ -1262,8 +1319,14 @@ def load_workflow(
             pca_n_components=pca_n_components,
             feature_selector_name=str(feature_selector_name),
         )
-        advanced_features.append(("feature_mixer", enhancer))
-
+        numeric_cols = make_column_selector(dtype_include=['number'])
+        dim_reduce = ColumnTransformer(transformers=[('dim_reduce',dim_reduce,numeric_cols)],
+                                       remainder='passthrough',
+                                       force_int_remainder_cols=False,
+                                       verbose_feature_names_out=False
+                                       )
+        advanced_features.append(("dim_reduce", dim_reduce))
+        
     if detector_list is not None:
         pyod_det = OutlierDetector(detector_list=detector_list)
         advanced_features.append(("outlier_scores", pyod_det))
@@ -1272,12 +1335,15 @@ def load_workflow(
         advanced_features = FeatureUnion(
             transformer_list=advanced_features, n_jobs=n_jobs
         )
-
+        
     # Final Pipeline
-    steps = [feature_engineer, dropper, encoder]
     if isinstance(advanced_features, TransformerMixin):
-        steps.append(advanced_features)
-
-    workflow = make_pipeline(*steps)
+        workflow_steps.append(('advanced_features',advanced_features))
+    
+    if classifier is not None:
+        to_df = ToDataframe()
+        workflow_steps = workflow_steps + [('to_df', to_df), ('model', classifier)]
+    
+    workflow = Pipeline(steps=workflow_steps)
 
     return workflow
