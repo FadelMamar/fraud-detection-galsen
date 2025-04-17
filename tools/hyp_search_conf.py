@@ -19,6 +19,7 @@ from sklearn.ensemble import (
     AdaBoostClassifier,
     StackingClassifier,
 )
+from sklearn.gaussian_process import GaussianProcessClassifier
 from catboost import CatBoostClassifier
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
@@ -338,7 +339,7 @@ models["sgdClassifier"] = dict(
 models["mlp"] = dict(
     hidden_layer_sizes=[
         (100,),
-        (100, 50),
+        (50, 25),
     ],
     activation=[
         "relu",
@@ -380,8 +381,8 @@ models["decisionTree"] = dict(
     criterion=["entropy", "gini"],
     splitter=["best"],
     max_depth=[5, 10, 15, 20, 25],
-    min_samples_split=[2, 3, 4],
-    min_samples_leaf=[1, 2],
+    min_samples_split=[2,],
+    min_samples_leaf=[1,],
     class_weight=[
         "balanced",
     ],
@@ -394,8 +395,8 @@ models["randomForest"] = dict(
     n_estimators=n_estimators,
     criterion=["entropy", "gini"],
     max_depth=max_depth,
-    min_samples_split=[2, 3, 4],
-    min_samples_leaf=[1, 2],
+    min_samples_split=[2,],
+    min_samples_leaf=[1,],
     class_weight=["balanced", "balanced_subsample"],
     max_features=[
         "sqrt",
@@ -441,6 +442,11 @@ models["gradientBoosting"] = dict(
     model=GradientBoostingClassifier,
 )
 
+models['gaussianProcess'] = dict(model=GaussianProcessClassifier,
+                                 n_restarts_optimizer=np.linspace(0,30,10).round().astype(int).tolist(),
+                                 max_iter_predict=[50,100,200,300],
+                                 warm_start=[True,]
+                            )
 # -> handles missig values
 models["histGradientBoosting"] = dict(
     loss=[
@@ -523,7 +529,6 @@ models["catboost"] = dict(iterations=[None, 50, 100, 150],
                           )
 
 models["lgbm"] = dict(
-    # iterations=[None, 100],
     n_estimators=n_estimators,
     objective=[
         "binary",
