@@ -1,55 +1,73 @@
 import joblib
 from fraudetect.config import load_args_from_json
-from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
-from fraudetect.dataset import MyDatamodule
-from fraudetect.config import Arguments
+from fraudetect.dataset import load_data
+
+from pathlib import Path
+import pandas as pd
+from datetime import datetime, date
+from sklearn.model_selection import (TimeSeriesSplit,
+                                     TunedThresholdClassifierCV)
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.frozen import FrozenEstimator
+import os
+import json
 
 
 if __name__ == "__main__":
-    run = joblib.load(
-        r"D:\fraud-detection-galsen\runs-optuna\small-models_2025-04-14_19-16_best-run.joblib"
-    )
-    results, transform_pipe, datamodule = run
+        
+    clf_path = r"..\runs-optuna\cat-models_2025-04-17_01-04_best-run.joblib"
+    
+    run = joblib.load(clf_path)
 
-    clf = results["decisionTree"].best_estimator_
     args, cfg = load_args_from_json(
-        r"D:\fraud-detection-galsen\runs-optuna\small-models_2025-04-14_19-16.json"
-    )
+    r"D:\fraud-detection-galsen\runs-optuna\cat-models_2025-04-18_16-41.json"
+    )   
 
-    COLUMNS_TO_DROP = [
-        "CurrencyCode",
-        "CountryCode",
-        "SubscriptionId",
-        "BatchId",
-        "CUSTOMER_ID",
-        "AccountId",
-        "TRANSACTION_ID",
-        "TX_DATETIME",
-        "TX_TIME_DAYS",
-    ]
+    clf = run[0].best_estimator_ #[0]
 
-    # args.data_path = r"D:\fraud-detection-galsen\data\training.csv"
+    raw_data_train = load_data("../data/training.csv")
 
-    # datamodule = MyDatamodule()
-    # feature_engineer = FraudFeatureEngineer(windows_size_in_days=args.windows_size_in_days,
-    #                                         uid_cols=None,
-    #                                         session_gap_minutes=30,
-    #                                         n_clusters=8
-    #                                         )
-    # encoding_kwargs = dict(n_components=14)
-    # encoder = FeatureEncoding(cat_encoding_method=args.cat_encoding_method,
-    #                         add_imputer=args.add_imputer,
-    #                             onehot_threshold=9,
-    #                             cols_to_drop=COLUMNS_TO_DROP,
-    #                             n_jobs=1,
-    #                             cat_encoding_kwards=encoding_kwargs
-    #                             )
-    # datamodule.setup(encoder=encoder, feature_engineer=feature_engineer)
+    raw_data_pred = load_data("../data/test.csv")
+    
+    X = raw_data_train.drop(columns=['TX_FRAUD'])
+    y = raw_data_train['TX_FRAUD']
 
-    X_train, y = datamodule.get_train_dataset(args.data_path)
+    # tune threshold
+    clf_tuned = TunedThresholdClassifierCV(clf,
+                                    scoring='f1',
+                                    cv=TimeSeriesSplit(n_splits=5,gap=0),
+                                )
+    clf_tuned.fit(X,y)
 
-    X_pred, _ = datamodule.get_predict_dataset(
-        r"D:\fraud-detection-galsen\data\test.csv"
-    )
+    # calibrated model
+    clf_calibrated = CalibratedClassifierCV(FrozenEstimator(clf),
+                                    method='sigmoid',
+                                    n_jobs=2,
+                                    ensemble=True,
+                                    cv=TimeSeriesSplit(n_splits=5,gap=0),
+                                )
+    clf_calibrated.fit(X,y)
+    
+    # Predict
+    y_pred_origin = clf.predict(raw_data_pred)
 
-    y_pred = clf.predict(X_pred)
+    y_pred_calibrated = clf_calibrated.predict(raw_data_pred)
+
+    y_pred_tuned = clf_tuned.predict(raw_data_pred)
+
+    for pred in [y_pred_origin, y_pred_calibrated, y_pred_tuned]:
+        print(pred.sum(), pred.sum()/pred.shape[0])
+
+    submission = pd.read_csv("../data/sample_submission.csv")
+    
+    submission['FraudResult'] = y_pred_calibrated
+    submission['FraudResult'] = submission['FraudResult'].astype(int)
+
+    # print(submission['FraudResult'].sum())
+
+    current_time = datetime.now().strftime("%H-%M")
+    filename = Path(clf_path).with_suffix('.csv').name
+    filename = os.path.join("../submissions",filename)
+
+    # submission.to_csv(filename,index=False)
+
