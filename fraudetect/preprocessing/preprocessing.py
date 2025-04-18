@@ -472,6 +472,7 @@ class DimensionReduction(TransformerMixin, BaseEstimator):
         self._pca_transform = None
         self._selector = None
 
+        
         if self.do_pca:
             n_components = min(self.pca_n_components, X.shape[1])
             if n_components == X.shape[1]:
@@ -657,8 +658,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         "spline_degree": [int],
         "spline_n_knots": [int],
         "use_sincos": [bool],
-        "use_nystrom": [bool],
-        "nystroem_kernel": [str],
         "add_seasonal_features": [bool],
         "add_fft": [bool],
     }
@@ -670,7 +669,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             None,
         ],
         session_gap_minutes: int = 30,
-        n_clusters: int = 8,
+        n_clusters: int = 0,
         uid_col_name: str = "CustomerUID",
         add_fraud_rate_features: bool = True,
         cluster_on_feature: str = "CUSTOMER_ID",
@@ -678,11 +677,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         spline_degree=3,
         spline_n_knots=6,
         use_sincos=False,
-        use_nystrom=False,
         add_seasonal_features=False,
         add_fft=False,
-        nystroem_kernel="poly",
-        nystroem_components=50,
         behavioral_drift_cols: list[str] = [
             "AccountId",
         ],
@@ -705,9 +701,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         self.use_sincos = use_sincos
 
-        self.use_nystrom = use_nystrom
-        self.nystroem_kernel = nystroem_kernel
-        self.nystroem_components = nystroem_components
 
     def check_dataframe(self, X: pd.DataFrame):
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
@@ -748,21 +741,12 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                     df_cyclical[[feature]]
                 )
 
-        if self.use_nystrom:
-            self._nystrom = Nystroem(
-                kernel=self.nystroem_kernel,
-                degree=3,
-                n_components=self.nystroem_components,
-                random_state=41,
-            )
-            self._nystrom.fit(df_cyclical)
-
         self.feature_names_in_ = list(X.columns)
         self.n_features_in_ = len(self.feature_names_in_)
         self.is_fitted_ = True
 
-        # if self.n_clusters is not None:
-        #     self._compute_clusters_customers(df)
+        if self.n_clusters > 0:
+            self._compute_clusters_customers(df)
 
         return self
 
@@ -787,7 +771,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df = self._add_temporal_identity_interactions(df)
         df = self._add_frequency_features(df)
 
-        if any([self.use_nystrom, self.use_sincos, self.use_spline]):
+        if self.use_sincos or self.use_spline:
             df = self._add_cyclical_features_transform(df)
 
         if self.add_fraud_rate_features:
@@ -799,8 +783,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         if self.add_fft:
             df = self._add_grouped_fft_features(df=df, freq="D", top_n_freqs=5)
 
-        # if self.n_clusters is not None:
-        #     df = self._add_customer_clusters(df)
+        if self.n_clusters > 0:
+            df = self._add_customer_clusters(df)
 
         df = self._cleanup(df)
         
@@ -814,9 +798,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self.fit(X=X, y=y, **fit_params)
         return self.transform(X=X, y=y)
     
-    # def get_feature_names_out(self,input_features=None):
-    #     return self._cols
-
+    
     # ---------- Private Helper Methods ----------
     def _create_unique_identifier(self, df: pd.DataFrame):
         df[self.uid_col_name] = df[self.uid_cols].apply(
@@ -1114,12 +1096,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                 X[f"{feature}_sin"] = np.sin(2 * np.pi * X[feature] / max_val)
                 X[f"{feature}_cos"] = np.cos(2 * np.pi * X[feature] / max_val)
 
-        if self.use_nystrom:
-            cols = list(self._cyclical_features) + ["TX_AMOUNT",]
-            kernel_features = self._nystrom.transform(X[cols])
-            kernel_cols = [f"nystrom_{i}" for i in range(kernel_features.shape[1])]
-            X[kernel_cols] = kernel_features
-
         return df
 
     def _add_grouped_seasonal_decomposition(self, df, freq="D", period=7):
@@ -1256,7 +1232,7 @@ def load_workflow(
     nystroem_components=50,
     add_imputer=False,
     rfe_step=3,
-    n_clusters=8,
+    n_clusters=0,
     k_score_func=mutual_info_classif,
     do_pca=True,
     verbose=False,
@@ -1271,13 +1247,10 @@ def load_workflow(
         n_clusters=n_clusters,
         add_fft=add_fft,
         add_seasonal_features=add_seasonal_features,
-        use_nystrom=use_nystrom,
         use_sincos=use_sincos,
         use_spline=use_spline,
         spline_degree=spline_degree,
         spline_n_knots=spline_n_knots,
-        nystroem_kernel=nystroem_kernel,
-        nystroem_components=nystroem_components,
         behavioral_drift_cols=behavioral_drift_cols,
         cluster_on_feature=cluster_on_feature,
         uid_col_name="CustomerUID",  # name given to uid cols created from interactions of uid_cols
@@ -1304,7 +1277,7 @@ def load_workflow(
     
     # get advanced features -> PCA, feature selection + outliers scores
     advanced_features = []
-    if (feature_selector_name is not None) or do_pca:
+    if (str(feature_selector_name) != 'None') or do_pca:
         dim_reduce = DimensionReduction(
             verbose=bool(verbose),
             estimator=feature_select_estimator,
@@ -1331,12 +1304,21 @@ def load_workflow(
     if detector_list is not None:
         pyod_det = OutlierDetector(detector_list=detector_list)
         advanced_features.append(("outlier_scores", pyod_det))
+    
+    if use_nystrom:
+        nystrom = Nystroem(
+            kernel=nystroem_kernel,
+            degree=3,
+            n_components=nystroem_components,
+        )
+        advanced_features.append(('nystrom',nystrom))
 
     if (detector_list is not None) or (feature_selector_name is not None):
         advanced_features = FeatureUnion(
             transformer_list=advanced_features, n_jobs=n_jobs
         )
-        
+       
+      
     # Final Pipeline
     if isinstance(advanced_features, TransformerMixin):
         workflow_steps.append(('advanced_features',advanced_features))
@@ -1348,3 +1330,6 @@ def load_workflow(
     workflow = Pipeline(steps=workflow_steps)
 
     return workflow
+
+
+# AdvancedFeatures = DimensionReduction
