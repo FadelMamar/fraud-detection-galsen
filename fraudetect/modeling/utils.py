@@ -263,6 +263,8 @@ class Tuner(object):
         for k,v in config.items():
             if isinstance(v, Sequence):
                 cfg[k] = trial.suggest_categorical(f"{name}__{k}", v)
+            else:
+                cfg[k] = v
 
         return cfg
 
@@ -395,7 +397,7 @@ class Tuner(object):
                 self.HYP_CONFIGS.feature_selector[feature_selector_name],
             )
             if feature_selector_name == 'selectkbest':
-                k_score_func = trial.suggest_categorical('selectkbest_score_func', ['f_classif','mutual_info_classif'])
+                k_score_func = trial.suggest_categorical('selectkbest_score_func', self.HYP_CONFIGS.selectkbest_score_func.keys())
                 k_score_func = self.HYP_CONFIGS.selectkbest_score_func[k_score_func]
                     
         # advanced features

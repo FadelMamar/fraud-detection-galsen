@@ -1347,11 +1347,12 @@ def load_workflow(
                                           remainder='passthrough',
                                           verbose_feature_names_out=False
                                         )
+    workflow_steps.append(('to_df_1',ToDataframe()))
     workflow_steps.append(('variance_thres',selector_variance))
     
     if classifier is not None:
         to_df = ToDataframe()
-        workflow_steps = workflow_steps + [('to_df', to_df), ('model', classifier)]
+        workflow_steps = workflow_steps + [('to_df_2', to_df), ('model', classifier)]
     
     workflow = Pipeline(steps=workflow_steps)
 
