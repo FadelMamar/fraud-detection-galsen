@@ -108,7 +108,6 @@ def hyperparameter_tuning(
             refit=True,
             n_jobs=n_jobs,
             n_iter=n_iter,
-            random_state=41,
             verbose=verbose,
         )
 
@@ -120,7 +119,7 @@ def hyperparameter_tuning(
         )
         param_dist = dict()
         for k, v in params_config.items():
-            if isinstance(v, Iterable) and len(v)>1:
+            if isinstance(v, Sequence):
                 param_dist[k] = optuna.distributions.CategoricalDistribution(v)
         
         search_engine = optuna.integration.OptunaSearchCV(
@@ -239,7 +238,7 @@ class Tuner(object):
         self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
         self.y_train = raw_data_train["TX_FRAUD"]
 
-        self.tune_threshold = False
+        self.tune_threshold = tune_threshold
 
         self.best_score = 0.0
         self.best_records = dict()
@@ -413,7 +412,7 @@ class Tuner(object):
                                     )
 
         feature_select_estimator = DecisionTreeClassifier(
-            max_depth=15, max_features="sqrt", random_state=41
+            max_depth=15, max_features=None, random_state=41
         )
         
        
