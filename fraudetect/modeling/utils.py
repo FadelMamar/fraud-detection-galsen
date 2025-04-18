@@ -14,6 +14,7 @@ from sklearn.model_selection import TimeSeriesSplit,TunedThresholdClassifierCV
 from sklearn.tree import DecisionTreeClassifier
 import random
 from collections.abc import Iterable
+from typing import Sequence
 import optuna
 from optuna.samplers import TPESampler
 from fraudetect import import_from_path
@@ -253,7 +254,7 @@ class Tuner(object):
         cfg = dict()
 
         for k,v in config.items():
-            if isinstance(v, Iterable) and len(v)>1:
+            if isinstance(v, Sequence):
                 cfg[k] = trial.suggest_categorical(f"{name}__{k}", v)
 
         return cfg
@@ -346,8 +347,8 @@ class Tuner(object):
         if str(self.args.cat_encoding_method) == 'None':
             if model_name not in ['catboost','xgboost','histGradientBoosting','lgbm']:
                 # raise ValueError("The provided model does not support un-encoded categorical variables")
-                cat_encoding_method = 'catboost'
-                print("The provided model does not support un-encoded categorical variables. Using catboost encoder.")
+                cat_encoding_method = 'binary'
+                print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} encoder.")
             
 
         # PCA
@@ -451,7 +452,7 @@ class Tuner(object):
         params_config = {
             f"model__{k}": v
             for k, v in models_config.items()
-            if len(v) > 1 and isinstance(v, Iterable)
+            if isinstance(v, Sequence)
         }
 
         X = self.X_train.copy()
