@@ -605,6 +605,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
                 add_indicator=False,
                 weights="distance",
             )
+            self._imputer.fit(X=X,y=y)
 
         self._col_transformer.fit(X=X, y=y)
 
@@ -623,7 +624,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
         if self._imputer is not None:
             y = np.array(y)
-            X = self._imputer.fit_transform(X=X, y=y)
+            X = self._imputer.transform(X=X)
 
         X = pd.DataFrame(data=X, columns=self.get_feature_names_out).convert_dtypes()
 
