@@ -22,7 +22,7 @@ from fraudetect.config import (
 from optuna.integration.mlflow import MLflowCallback
 
 from fraudetect.modeling.utils import Tuner
-
+from typing import Sequence
 
 # %%main
 if __name__ == "__main__":
@@ -48,17 +48,18 @@ if __name__ == "__main__":
 
     current_time = datetime.now().strftime("%H-%M")
 
+    mlflow_exp_name = "cat-models" 
     args.study_name = "cat-models"
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
     args.optuna_n_trials = 30
 
     args.cv_n_iter = 200
-    args.scoring = "f1"  # 'f1', precision
+    args.scoring = ["f1", "average_precision", "precision", "recall"]  # ["f1", "average_precision", "precision", "recall"]
     args.cv_method = "optuna"  # optuna random
     args.cv_gap = 1051 * 5
     args.n_splits = 5  #
-    args.n_jobs = 4 # for hyp tuning
+    args.n_jobs = 2 # for hyp tuning
     args.delta_train = 50
     args.delta_delay = 7
     args.delta_test = 20
@@ -122,18 +123,22 @@ if __name__ == "__main__":
     # for debugging
     # demo(args=args)
 
-    args.work_dir = CURDIR / "runs-optuna"
+    args.work_dir = CURDIR / "../runs-optuna"
     args.work_dir.mkdir(parents=True, exist_ok=True)
     args.work_dir = str(args.work_dir)  # for json serialization
 
     # using optuna
-    
+    opt_direction = dict()
+    if isinstance(args.scoring,Sequence):
+        opt_direction['directions'] = ["maximize"]*len(args.scoring)
+    else:
+        opt_direction['direction'] = "maximize"
     study = optuna.create_study(
-        direction="maximize",
         sampler=TPESampler(multivariate=True, group=True),
         study_name=args.study_name,
         load_if_exists=True,
         storage="sqlite:///hypsearch.sql",
+        **opt_direction
     )
 
     # save args
@@ -148,13 +153,11 @@ if __name__ == "__main__":
     )
     objective_optuna.load_hyp_conf(CURDIR / "hyp_search_conf.py")
 
-    mlflow.set_tracking_uri(uri="http://localhost:5000")
-    exp_name = "".join(args.study_name.split('_')[:-2])
-    
+    mlflow.set_tracking_uri(uri="http://localhost:5000")    
     try:
-        exp_id = mlflow.get_experiment_by_name(exp_name).experiment_id
+        exp_id = mlflow.get_experiment_by_name(mlflow_exp_name).experiment_id
     except:
-        exp_id = mlflow.create_experiment(name=exp_name)
+        exp_id = mlflow.create_experiment(name=mlflow_exp_name)
 
     mlflow.set_experiment(experiment_id=exp_id)
     mlflc = MLflowCallback(metric_name=args.scoring,

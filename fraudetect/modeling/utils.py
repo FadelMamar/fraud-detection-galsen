@@ -10,7 +10,10 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import get_scorer, f1_score
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import TimeSeriesSplit,TunedThresholdClassifierCV
+from sklearn.model_selection import (TimeSeriesSplit,
+                                     TunedThresholdClassifierCV,
+                                     cross_val_score,
+                                     cross_validate)
 from sklearn.tree import DecisionTreeClassifier
 import random
 from collections.abc import Iterable
@@ -31,11 +34,16 @@ from ..detectors import get_detector, instantiate_detector
 
 
 def evaluate(classifier, X, y):
-    metrics = ["accuracy", "f1", "average_precision", "precision", "recall"]
-    for metric in metrics:
-        scorer = get_scorer(metric)
-        score = scorer(classifier, X, y)
-        print(f"{metric}: {score:.4f}")
+    metrics = ["f1", "average_precision", "precision", "recall"]
+    # out = dict()
+    # for metric in metrics:
+    #     scorer = get_scorer(metric)
+    #     score = scorer(classifier, X, y)
+    #     out[metric] = score
+    
+    out = {metric:get_scorer(metric)(classifier, X, y) for metric in metrics}
+
+    return out
 
 
 def get_model(model_name: str, config: dict) -> dict:
@@ -134,7 +142,7 @@ def hyperparameter_tuning(
             max_iter=300,
             timeout=60 * 3,
             n_trials=n_iter,
-            random_state=41,
+            # random_state=41,
             verbose=verbose,
         )
 
@@ -219,8 +227,8 @@ class Tuner(object):
     ):
         self.HYP_CONFIGS = None
 
-        self.args = deepcopy(args)
-        self.pyod_detectors = deepcopy(sorted(self.args.pyod_detectors))
+        self.args = args
+        self.pyod_detectors = sorted(self.args.pyod_detectors)
         self.pyod_choices = [
             json.dumps(list(k))
             for k in combinations(self.pyod_detectors, min(4, len(args.pyod_detectors)))
@@ -246,7 +254,7 @@ class Tuner(object):
             args.work_dir, args.study_name + "_best-run.joblib"
         )
         
-        assert isinstance(self.args.scoring, str), "It should be a string."
+        # assert isinstance(self.args.scoring, str), "It should be a string."
 
     def sample_cfg_optuna(self, trial, name: str, config: dict):
         
@@ -324,15 +332,7 @@ class Tuner(object):
         model, models_config = get_model(model_name, self.HYP_CONFIGS.models)
         model = instantiate_model(
             model, **sample_model_cfg(models_config)
-        )
-
-        # tuned threshold version
-        if trial.suggest_categorical('tune_threshold',[False,self.tune_threshold]):
-            model = TunedThresholdClassifierCV(model,
-                                               scoring='f1',
-                                               cv=TimeSeriesSplit(n_splits=3,gap=1000),
-                                            )
-
+        )        
 
         # set handle categorical variables
         cat_encoding_method = self.args.cat_encoding_method
@@ -349,7 +349,6 @@ class Tuner(object):
                 cat_encoding_method = 'binary'
                 print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} encoder.")
             
-
         # PCA
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
         pca_n_components = None
@@ -414,8 +413,7 @@ class Tuner(object):
         feature_select_estimator = DecisionTreeClassifier(
             max_depth=15, max_features=None, random_state=41
         )
-        
-       
+              
         classifier = load_workflow(
             classifier=model,
             cols_to_drop=self.args.cols_to_drop,
@@ -442,40 +440,79 @@ class Tuner(object):
             verbose=self.verbose,
             n_jobs=self.args.n_jobs,
             **advanced_transformation
-        )
-        
-        
+        )        
 
-        # classifier = Pipeline(
-        #     steps=[("data_processor", data_processor), ("model", model)]
-        # )
+        # get workflow parameters
         params_config = {
             f"model__{k}": v
             for k, v in models_config.items()
             if isinstance(v, Sequence)
         }
 
+        sampled_cfg = dict()
+        for k, v in params_config.items():
+            if isinstance(v, Sequence):
+                sampled_cfg[k] = trial.suggest_categorical(k,v)
+            else:
+                sampled_cfg[k] = k
+        # update params
+        classifier.set_params(**sampled_cfg)
+
+        # tuned threshold version
+        if trial.suggest_categorical('tune_threshold',[False,self.tune_threshold]):
+            classifier = TunedThresholdClassifierCV(classifier,
+                                               scoring='f1',
+                                               cv=TimeSeriesSplit(n_splits=3,gap=1000),
+                                            )
+
         X = self.X_train.copy()
         y = self.y_train.copy()
-        results = self._run(
-            classifier=classifier,
-            params_config=params_config,
-            X_train=X,
-            y_train=y,
-            save_path=None,
-            verbose=self.verbose,
-        )
+
+        results = cross_validate(estimator=classifier,
+                        X=X,
+                        y=y,
+                        return_estimator=True,
+                        cv=TimeSeriesSplit(n_splits=self.args.n_splits,
+                                           gap=self.args.cv_gap),
+                        scoring=self.args.scoring, #evaluate
+                        error_score='raise',
+                        n_jobs=self.args.n_jobs,
+                        pre_dispatch=self.args.n_jobs,
+                    )
+        
+        scores = []
+        if isinstance(self.args.scoring,Sequence):
+            scores = [np.mean(results[f"test_{metric}"]) for metric in self.args.scoring]
+        else:
+            scores = np.mean(results["test_score"])
+        estimators_cv_splits = results['estimator']
+        
+        fitness = np.mean(scores)
+        self.save_checkpoint(model_name=model_name, score=fitness, results=estimators_cv_splits)
+
+        # #-- cv gridsearch
+        # results = self._run(
+        #     classifier=classifier,
+        #     params_config=params_config,
+        #     X_train=X,
+        #     y_train=y,
+        #     save_path=None,
+        #     verbose=self.verbose,
+        # )
 
         # try to get score
-        try:
-            score = results.best_score_
+        # try:
+            # score = results.best_score_
             # results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
             # results["samplers"] = (sampler_names, sampler_cfgs)
-            self.save_checkpoint(model_name=model_name, score=score, results=results)
+            # self.save_checkpoint(model_name=model_name, score=score, results=results)
 
-        except ValueError:
-            traceback.print_exc()
+        # except ValueError:
+        #     traceback.print_exc()
             # print(results, "\n")
-            score = 0
+            # score = 0
 
-        return score
+        if isinstance(self.args.scoring,Sequence):
+            return tuple(scores)
+        else:
+            return scores

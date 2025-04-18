@@ -275,7 +275,7 @@ models = dict()
 learning_rate = np.logspace(-2,-1,10).tolist()
 C = np.logspace(-1,5,50).tolist()
 n_estimators = np.arange(3, 40,).tolist()
-max_depth = np.arange(3, 30).tolist()
+max_depth = np.arange(3, 15).tolist()
 
 # own models
 models["clusterElastic"] = dict(
