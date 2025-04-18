@@ -405,10 +405,15 @@ class Tuner(object):
                 use_sincos=self.args.use_sincos,
                 use_spline=self.args.use_spline,
         )
+        
         for k,v in advanced_transformation.items():
             advanced_transformation[k] = trial.suggest_categorical(
                                         k, [False, v],
                                     )
+            
+        if advanced_transformation['use_nystrom']:
+            advanced_transformation['nystroem_components'] = trial.suggest_int("nystroem_components", 5, 50, 5)
+
 
         feature_select_estimator = DecisionTreeClassifier(
             max_depth=15, max_features=None, random_state=41
@@ -468,6 +473,7 @@ class Tuner(object):
         X = self.X_train.copy()
         y = self.y_train.copy()
 
+        # get results
         results = cross_validate(estimator=classifier,
                         X=X,
                         y=y,
@@ -485,8 +491,9 @@ class Tuner(object):
             scores = [np.mean(results[f"test_{metric}"]) for metric in self.args.scoring]
         else:
             scores = np.mean(results["test_score"])
-        estimators_cv_splits = results['estimator']
         
+        #- save checkpoint
+        estimators_cv_splits = results['estimator']
         fitness = np.mean(scores)
         self.save_checkpoint(model_name=model_name, score=fitness, results=estimators_cv_splits)
 
