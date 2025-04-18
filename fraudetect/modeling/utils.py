@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import get_scorer, f1_score
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit,TunedThresholdClassifierCV
 from sklearn.tree import DecisionTreeClassifier
 import random
 from collections.abc import Iterable
@@ -215,6 +215,7 @@ class Tuner(object):
         verbose: int = 0,
         cat_encoding_kwards: dict = {},
         feature_selector_kwargs: dict = {},
+        tune_threshold:bool=False
     ):
         self.HYP_CONFIGS = None
 
@@ -236,6 +237,8 @@ class Tuner(object):
         raw_data_train = load_data(args.data_path)
         self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
         self.y_train = raw_data_train["TX_FRAUD"]
+
+        self.tune_threshold = False
 
         self.best_score = 0.0
         self.best_records = dict()
@@ -322,6 +325,15 @@ class Tuner(object):
         model = instantiate_model(
             model, **sample_model_cfg(models_config)
         )
+
+        # tuned threshold version
+        if trial.suggest_categorical('tune_threshold',[False,self.tune_threshold]):
+            model = TunedThresholdClassifierCV(model,
+                                               scoring='f1',
+                                               cv=TimeSeriesSplit(n_splits=3,gap=1000),
+                                            )
+
+
         # set handle categorical variables
         cat_encoding_method = self.args.cat_encoding_method
         if model_name == "histGradientBoosting":
@@ -422,7 +434,7 @@ class Tuner(object):
             cat_encoding_method=cat_encoding_method,
             cat_encoding_kwargs=self.cat_encoding_kwards,
             imputer_n_neighbors=9,
-            n_clusters=8,
+            n_clusters=0,
             top_k_best=selector_cfg.get("k", 50),
             k_score_func=k_score_func,
             do_pca=do_pca,
