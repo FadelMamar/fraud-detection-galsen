@@ -1329,18 +1329,24 @@ def load_workflow(
         )
         advanced_features.append(('nystrom',nystrom))
 
-    if (detector_list is not None) or (feature_selector_name is not None):
+    if len(advanced_features)>0:
         advanced_features = FeatureUnion(
             transformer_list=advanced_features, n_jobs=n_jobs
         )
-       
-      
+          
     # Final Pipeline
     if isinstance(advanced_features, TransformerMixin):
         workflow_steps.append(('advanced_features',advanced_features))
     
     # drop features with very low variance <5%
     selector_variance = VarianceThreshold(threshold=5e-2)
+    selector_variance = ColumnTransformer(transformers=[('variance_thres',
+                                                         selector_variance,
+                                                         make_column_selector(dtype_include=['number']))
+                                                        ],
+                                          remainder='passthrough',
+                                          verbose_feature_names_out=False
+                                        )
     workflow_steps.append(('variance_thres',selector_variance))
     
     if classifier is not None:
