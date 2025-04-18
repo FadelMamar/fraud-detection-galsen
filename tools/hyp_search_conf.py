@@ -274,15 +274,15 @@ models = dict()
 
 learning_rate = np.logspace(-2,-1,10).tolist()
 C = np.logspace(-1,5,50).tolist()
-n_estimators = np.linspace(3, 40, 30).round().astype(int).tolist()
-max_depth = np.linspace(3, 30, 20).round().astype(int).tolist()
+n_estimators = np.arange(3, 40,).tolist()
+max_depth = np.arange(3, 30).tolist()
 
 # own models
 models["clusterElastic"] = dict(
     en_l1_ratio=np.linspace(0.1, 0.9, 10).round(3).tolist(),
     random_state=[41],
     n_clusters=np.arange(3,11).tolist(),
-    base_estimator=DecisionTreeClassifier(max_depth=5,
+    base_estimator=DecisionTreeClassifier(max_depth=15,
                                         class_weight='balanced',
                                         max_features=None),
     model=ClusterElasticClassifier,
@@ -634,6 +634,6 @@ scoring = [
 
 feature_selector["selectkbest"] = dict(
     selector=SelectKBest,
-    k=np.linspace(10,80,num=50).round().astype(int).tolist(),
+    k=np.linspace(25,80,num=30).round().astype(int).tolist(),
 )
 selectkbest_score_func=dict(f_classif=f_classif,mutual_info_classif=mutual_info_classif)

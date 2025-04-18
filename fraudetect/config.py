@@ -45,6 +45,8 @@ class Arguments:
 
     run_name: str = "debug"
 
+    reorder_by:Sequence=('TX_DATETIME',)
+
     # data pre-processing
     delta_train: int = 40
     delta_delay: int = 7

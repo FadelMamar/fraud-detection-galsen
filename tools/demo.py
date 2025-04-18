@@ -254,7 +254,7 @@ import numpy as np
 from sklearn.tree import DecisionTreeClassifier
 from shutil import rmtree
 from joblib import Memory
-from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import RandomizedSearchCV, cross_val_score, TimeSeriesSplit
 from sklearn.model_selection import TimeSeriesSplit
 from typing import Sequence
 
@@ -310,7 +310,7 @@ y_train = raw_data_train["TX_FRAUD"]
 # "histGradientBoosting",
 # "catboost",
 # 'lgbm',
-model_name = 'clusterElastic' #
+model_name = 'decisionTree' #
 model, model_cfgs = get_model(model_name, CONFIGS.models)
 model_cfg = sample_model_cfg(model_cfgs)
 model = instantiate_model(model, **model_cfg)
@@ -318,15 +318,18 @@ model = instantiate_model(model, **model_cfg)
 
 
 workflow = load_workflow(
-    classifier=model,
-    cols_to_drop=COLUMNS_TO_DROP,
+    classifier=DecisionTreeClassifier(max_depth=15, max_features="sqrt", random_state=41),
+    cols_to_drop=COLUMNS_TO_DROP,#+["CustomerUID"],
     feature_select_estimator=DecisionTreeClassifier(max_depth=15, max_features="sqrt", random_state=41),
     pca_n_components=80,
     detector_list=None,  # model_list,
     session_gap_minutes=60 * 3,
     uid_cols=[
-        None,
+        # 'AccountId',
+        None
     ],
+    uid_col_name="CustomerUID",
+    reorder_by=['TX_DATETIME','AccountId'], # 
     add_imputer=False,
     feature_selector_name='None',  # "selectkbest", 'None'
     top_k_best=50,
@@ -352,7 +355,8 @@ workflow = load_workflow(
 y_train = raw_data_train['TX_FRAUD']
 X_train = raw_data_train.drop(columns=['TX_FRAUD'])
 
-print("score: ",workflow.fit(X=X_train,y=y_train).score(X=X_train,y=y_train))
+score = cross_val_score(workflow,X=X_train,y=y_train,cv=TimeSeriesSplit(n_splits=3,gap=5000),scoring='f1',n_jobs=8)
+print("score: ", score)
 # workflow.predict(X_train)
 
 # X_train_processed = workflow.fit_transform(X=X_train, y=y_train) #.score(X=raw_data_train,y=y_train)
@@ -383,36 +387,36 @@ params_config = {f"model__{k}":v for k,v in model_cfgs.items() if isinstance(v, 
 #     verbose=True,
 # )
 
-import optuna
-from optuna.samplers import TPESampler
+# import optuna
+# from optuna.samplers import TPESampler
 
-study = optuna.create_study(
-    direction="maximize",
-    sampler=TPESampler(multivariate=True, group=True),
-    load_if_exists=True,
-)
+# study = optuna.create_study(
+#     direction="maximize",
+#     sampler=TPESampler(multivariate=True, group=True),
+#     load_if_exists=True,
+# )
 
-cfg = dict()
-for k, v in params_config.items():
-    if isinstance(v, Sequence):
-        cfg[k] = optuna.distributions.CategoricalDistribution(v)
+# cfg = dict()
+# for k, v in params_config.items():
+#     if isinstance(v, Sequence):
+#         cfg[k] = optuna.distributions.CategoricalDistribution(v)
 
-search_engine = optuna.integration.OptunaSearchCV(
-    workflow,
-    param_distributions=cfg,
-    cv=TimeSeriesSplit(n_splits=5, gap=5000),
-    refit=True,
-    n_jobs=1,
-    study=study,
-    scoring="f1",
-    error_score="raise",
-    max_iter=300,
-    timeout=60 * 3,
-    n_trials=5,
-    # random_state=41,
-    verbose=True,
-)
+# search_engine = optuna.integration.OptunaSearchCV(
+#     workflow,
+#     param_distributions=cfg,
+#     cv=TimeSeriesSplit(n_splits=5, gap=5000),
+#     refit=True,
+#     n_jobs=1,
+#     study=study,
+#     scoring="f1",
+#     error_score="raise",
+#     max_iter=300,
+#     timeout=60 * 3,
+#     n_trials=5,
+#     # random_state=41,
+#     verbose=True,
+# )
 
-search_engine.fit(X=X_train, y=y_train)
+# search_engine.fit(X=X_train, y=y_train)
 
 # print(search_engine.best_estimator_)

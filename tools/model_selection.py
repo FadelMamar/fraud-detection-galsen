@@ -34,7 +34,7 @@ if __name__ == "__main__":
     args.model_names = (
         # "mlp",
         "decisionTree",
-        "clusterElastic",
+        # "clusterElastic",
         # "logisticReg",
         # "svc",
         # "randomForest",
@@ -76,6 +76,8 @@ if __name__ == "__main__":
     args.use_nystrom=True
     args.use_sincos=False
     args.use_spline=True
+
+    args.reorder_by = ('TX_DATETIME','AccountId')
 
     args.disable_pyod_outliers = True
     args.pyod_detectors = [

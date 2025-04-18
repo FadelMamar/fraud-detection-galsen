@@ -426,6 +426,7 @@ class Tuner(object):
             pca_n_components=pca_n_components or 20,
             detector_list=detector_list,
             cv_gap=self.args.cv_gap,
+            reorder_by=self.args.reorder_by,
             n_splits=self.args.n_splits,
             session_gap_minutes=self.args.session_gap_minutes,
             uid_cols=self.args.concat_features,

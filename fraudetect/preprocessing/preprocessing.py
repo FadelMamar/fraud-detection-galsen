@@ -1,4 +1,5 @@
 from pyod.models.base import BaseDetector
+from typing import Sequence
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -686,6 +687,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         behavioral_drift_cols: list[str] = [
             "AccountId",
         ],
+        reorder_by=['TX_DATETIME'],
     ):
         self.windows_size_in_days = windows_size_in_days
         self.uid_cols = uid_cols
@@ -704,6 +706,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self.spline_n_knots = spline_n_knots
 
         self.use_sincos = use_sincos
+
+        self.reorder_by=reorder_by # passed to df.sort_values, str or list[str]
 
 
     def check_dataframe(self, X: pd.DataFrame):
@@ -797,7 +801,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self.check_dataframe(df)
 
         # reorder
-        df = df.sort_values(by=['AccountId','CUSTOMER_ID','TX_DATETIME']).reset_index(drop=True)
+        if self.reorder_by is not None:
+            df = df.sort_values(by=self.reorder_by).reset_index(drop=True)
 
         return df
 
@@ -1215,7 +1220,9 @@ def load_workflow(
     uid_cols=[
         None,
     ],
+    uid_col_name="CustomerUID",
     add_fraud_rate_features: bool = True,
+    reorder_by=['TX_DATETIME',],
     behavioral_drift_cols=[
         "AccountId",
     ],
@@ -1249,6 +1256,7 @@ def load_workflow(
     feature_engineer = FraudFeatureEngineer(
         windows_size_in_days=windows_size_in_days,
         uid_cols=uid_cols,
+        reorder_by=list(reorder_by) if isinstance(reorder_by,Sequence) else reorder_by,
         add_fraud_rate_features=add_fraud_rate_features,
         session_gap_minutes=session_gap_minutes,
         n_clusters=n_clusters,
@@ -1260,7 +1268,7 @@ def load_workflow(
         spline_n_knots=spline_n_knots,
         behavioral_drift_cols=behavioral_drift_cols,
         cluster_on_feature=cluster_on_feature,
-        uid_col_name="CustomerUID",  # name given to uid cols created from interactions of uid_cols
+        uid_col_name=uid_col_name,  # name given to uid cols created from interactions of uid_cols
     )
     
     workflow_steps = [('feature_engineer', feature_engineer)]
@@ -1330,6 +1338,7 @@ def load_workflow(
     if isinstance(advanced_features, TransformerMixin):
         workflow_steps.append(('advanced_features',advanced_features))
     
+    # drop features with very low variance <5%
     selector_variance = VarianceThreshold(threshold=5e-2)
     workflow_steps.append(('variance_thres',selector_variance))
     

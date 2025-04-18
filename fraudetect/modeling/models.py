@@ -268,7 +268,7 @@ class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
                 random_state=self.random_state
             )
             en.fit(Xc, yc)
-            selected = np.where(en.coef_ != 0)[0]
+            selected = np.where(np.isclose(en.coef_ , 0., rtol=1e-3))[0]
             if selected.size == 0:
                 selected = np.arange(X.shape[1])
             
