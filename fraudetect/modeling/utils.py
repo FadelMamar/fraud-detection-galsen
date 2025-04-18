@@ -452,7 +452,7 @@ class Tuner(object):
         sampled_cfg = dict()
         for k, v in params_config.items():
             if isinstance(v, Sequence):
-                sampled_cfg[k] = trial.suggest_categorical(k,v)
+                sampled_cfg[k] = trial.suggest_categorical(f"{model_name}_{k}",v)
             else:
                 sampled_cfg[k] = k
         # update params
@@ -475,7 +475,7 @@ class Tuner(object):
                         cv=TimeSeriesSplit(n_splits=self.args.n_splits,
                                            gap=self.args.cv_gap),
                         scoring=self.args.scoring, #evaluate
-                        error_score='raise',
+                        error_score=np.nan,
                         n_jobs=self.args.n_jobs,
                         pre_dispatch=self.args.n_jobs,
                     )
