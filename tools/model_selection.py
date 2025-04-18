@@ -28,20 +28,22 @@ from fraudetect.modeling.utils import Tuner
 if __name__ == "__main__":
     # Running
     args = Arguments()
-    args.data_path = str(Path(__file__).parent / "../data/training.csv")
+    CURDIR  = Path(__file__).parent
+    args.data_path = str(CURDIR / "../data/training.csv")
 
     args.model_names = (
         # "mlp",
-        # "decisionTree",
+        "decisionTree",
+        "clusterElastic",
         # "logisticReg",
         # "svc",
         # "randomForest",
         # "balancedRandomForest",
         # "gradientBoosting",
-        "histGradientBoosting",
-        "catboost",
-        'lgbm',
-        "xgboost",
+        # "histGradientBoosting",
+        # "catboost",
+        # 'lgbm',
+        # "xgboost",
     )
 
     current_time = datetime.now().strftime("%H-%M")
@@ -49,14 +51,14 @@ if __name__ == "__main__":
     args.study_name = "cat-models"
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
-    args.optuna_n_trials = 20
+    args.optuna_n_trials = 30
 
     args.cv_n_iter = 200
     args.scoring = "f1"  # 'f1', precision
     args.cv_method = "optuna"  # optuna random
     args.cv_gap = 1051 * 5
     args.n_splits = 5  #
-    args.n_jobs = 1 # for hyp tuning
+    args.n_jobs = 4 # for hyp tuning
     args.delta_train = 50
     args.delta_delay = 7
     args.delta_test = 20
@@ -66,15 +68,14 @@ if __name__ == "__main__":
     args.cols_to_drop = COLUMNS_TO_DROP
 
     args.session_gap_minutes = 60 * 3
-    args.onehot_threshold = 9
 
-    args.do_pca = True  # try pca
+    args.do_pca = False  # try pca
     args.do_feature_selection = True
     args.add_fft=True
     args.add_seasonal_features=True
     args.use_nystrom=True
-    args.use_sincos=True
-    args.use_spline=True 
+    args.use_sincos=False
+    args.use_spline=True
 
     args.disable_pyod_outliers = True
     args.pyod_detectors = [
@@ -101,9 +102,10 @@ if __name__ == "__main__":
 
     args.add_imputer = False  # handle missing values at prediction time
 
-    args.cat_encoding_method = "None"  # to handle unknown values effectively, 'catboost', 'binary', 'hashing', 'None'
+    args.cat_encoding_method = "binary"  # to handle unknown values effectively, 'catboost', 'binary', 'hashing', 'None'
     args.cat_encoding_hash_n_components = 7  # if cat_encoding_method='hashing'
     args.cat_encoding_base_n = 4  # if cat_encoding_method=base_n
+    args.onehot_threshold = 9
     args.windows_size_in_days = (1, 7, 30)
     cat_encoding_kwards = dict(
         hash_n_components=args.cat_encoding_hash_n_components,
@@ -118,7 +120,7 @@ if __name__ == "__main__":
     # for debugging
     # demo(args=args)
 
-    args.work_dir = Path("./runs-optuna")
+    args.work_dir = CURDIR / "runs-optuna"
     args.work_dir.mkdir(parents=True, exist_ok=True)
     args.work_dir = str(args.work_dir)  # for json serialization
 
@@ -137,12 +139,21 @@ if __name__ == "__main__":
         json.dump({"args": args.__dict__}, file, indent=4)
 
     objective_optuna = Tuner(
-        args=args, verbose=0, cat_encoding_kwards=cat_encoding_kwards
+        args=args, 
+        verbose=0, 
+        cat_encoding_kwards=cat_encoding_kwards,
+        tune_threshold=True
     )
-    objective_optuna.load_hyp_conf("./hyp_search_conf.py")
+    objective_optuna.load_hyp_conf(CURDIR / "hyp_search_conf.py")
 
     mlflow.set_tracking_uri(uri="http://localhost:5000")
-    exp_id = mlflow.create_experiment(name=args.study_name,)
+    exp_name = "".join(args.study_name.split('_')[:-2])
+    
+    try:
+        exp_id = mlflow.get_experiment_by_name(exp_name).experiment_id
+    except:
+        exp_id = mlflow.create_experiment(name=exp_name)
+
     mlflow.set_experiment(experiment_id=exp_id)
     mlflc = MLflowCallback(metric_name=args.scoring,
                            create_experiment=False,

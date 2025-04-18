@@ -155,6 +155,8 @@ venv.bak/
 runs*
 
 cachedir
+tools/catboost_info/
+mlruns
 
 # mypy
 .mypy_cache/

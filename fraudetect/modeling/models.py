@@ -6,13 +6,15 @@ from torchtune.modules import RotaryPositionalEmbeddings
 from skorch import NeuralNetClassifier
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.base import BaseEstimator, ClassifierMixin, clone
+from sklearn.mixture import GaussianMixture
 from sklearn.cluster import KMeans
 from sklearn.linear_model import ElasticNet
-from sklearn.gaussian_process import GaussianProcessClassifier
-from sklearn.gaussian_process.kernels import RBF
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.utils.multiclass import check_classification_targets
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super().__init__()
@@ -28,6 +30,7 @@ class PositionalEncoding(nn.Module):
         seq_len = x.size(1)
         x = x + self.pe[:, :seq_len]
         return x
+
 
 class FraudTransformer(nn.Module):
     def __init__(self, input_dim, d_model=64, n_heads=4, num_layers=2, dropout=0.1, num_classes=2):
@@ -62,6 +65,7 @@ class FraudTransformer(nn.Module):
         x = self.dropout(x)
         x = self.classifier(x)                      # (batch_size, num_classes)
         return x
+
 
 class FraudGRU(nn.Module):
     def __init__(self, input_dim, hidden_dim=64, num_layers=2, dropout=0.1, num_classes=2):
@@ -200,82 +204,101 @@ class FraudTransformerWithRoPE(nn.Module):
 
 
 
-class ClusterElasticGPC(ClassifierMixin,BaseEstimator):
+class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
     """
-    Hybrid classifier: KMeans clustering → ElasticNet feature selection → GaussianProcessClassifier.
+    Hybrid model: GMM clustering → ElasticNet feature selection → Flexible classifier per cluster.
+    
+    Parameters:
+    -----------
+    n_clusters : int
+        Number of GMM clusters.
+    base_estimator : sklearn estimator
+        The classifier to be trained per cluster (e.g., LogisticRegression, RandomForestClassifier).
+    en_alpha : float
+        Alpha parameter for ElasticNet.
+    en_l1_ratio : float
+        L1 ratio for ElasticNet.
+    random_state : int
+        Random seed for reproducibility.
     """
     def __init__(
         self,
         n_clusters=5,
-        en_alpha=1.0,
+        base_estimator=DecisionTreeClassifier(max_depth=5,
+                                              class_weight='balanced',
+                                              max_features=None),
         en_l1_ratio=0.5,
-        gp_kernel=None,
         random_state=42
     ):
         self.n_clusters = n_clusters
-        self.en_alpha = en_alpha
+        self.base_estimator = base_estimator
         self.en_l1_ratio = en_l1_ratio
-        self.gp_kernel = gp_kernel or 1.0 * RBF(length_scale=1.0)
         self.random_state = random_state
 
     def fit(self, X, y):
-        # 1) Cluster the data
-        self.kmeans_ = KMeans(
-            n_clusters=self.n_clusters,
+        self.gmm_ = GaussianMixture(
+            n_components=self.n_clusters,
+            covariance_type='full',
+            init_params='k-means++',
             random_state=self.random_state
-        ).fit(X)  # :contentReference[oaicite:4]{index=4}
-        clusters = self.kmeans_.labels_
+        ).fit(X)
+
+        X = np.array(X)
+
+        X, y = self._validate_data(X, y)
+        check_classification_targets(y)
+
+        self.classes_ = np.unique(y)
         
-        # Prepare per-cluster models
+        clusters = self.gmm_.predict(X)
+        
         self.elasticnets_ = {}
-        self.gp_models_ = {}
+        self.cluster_models_ = {}
         
         for c in range(self.n_clusters):
             idx = np.where(clusters == c)[0]
-            Xc, yc = X[idx], y[idx]
             if len(idx) == 0:
                 continue
             
-            # 2) ElasticNet for feature selection
+            Xc, yc = X[idx], y[idx]
+            
             en = ElasticNet(
-                alpha=self.en_alpha,
+                alpha=1.0,
                 l1_ratio=self.en_l1_ratio,
                 random_state=self.random_state
             )
-            en.fit(Xc, yc)  # :contentReference[oaicite:5]{index=5}
+            en.fit(Xc, yc)
             selected = np.where(en.coef_ != 0)[0]
             if selected.size == 0:
-                # Fallback: use all features if none selected
                 selected = np.arange(X.shape[1])
+            
             self.elasticnets_[c] = selected
             
-            # 3) Train GPC on selected features
-            gp = GaussianProcessClassifier(
-                kernel=self.gp_kernel,
-                random_state=self.random_state
-            )
-            gp.fit(Xc[:, selected], yc)  # :contentReference[oaicite:6]{index=6}
-            self.gp_models_[c] = gp
+            # Clone and train the base estimator
+            model = clone(self.base_estimator)
+            model.fit(Xc[:, selected], yc)
+            self.cluster_models_[c] = model
         
         return self
 
     def predict_proba(self, X):
-        # Route each sample to its cluster’s GPC
-        clusters = self.kmeans_.predict(X)
-        proba = np.zeros((X.shape[0], 2))
+
+        X = np.array(X)
+
+        clusters = self.gmm_.predict(X)
+        proba = np.zeros((X.shape[0], 2))  # Binary classification
         
-        for c, gp in self.gp_models_.items():
+        for c, model in self.cluster_models_.items():
             sel = np.where(clusters == c)[0]
             if sel.size == 0:
                 continue
-            idx_feats = self.elasticnets_[c]
-            proba[sel] = gp.predict_proba(X[sel][:, idx_feats])
+            feats = self.elasticnets_[c]
+            proba[sel] = model.predict_proba(X[sel][:,feats])
         
         return proba
 
     def predict(self, X):
-        proba = self.predict_proba(X)
-        return np.argmax(proba, axis=1)
+        return np.argmax(self.predict_proba(X), axis=1)
 
 # Skorch wrapper
 # net_rop = NeuralNetClassifier(

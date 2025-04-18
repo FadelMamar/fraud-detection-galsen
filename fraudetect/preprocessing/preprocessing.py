@@ -22,6 +22,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler, SplineTransform
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.feature_selection import (
     RFECV,
+    VarianceThreshold,
     SequentialFeatureSelector,
     SelectKBest,
     f_classif,
@@ -591,6 +592,8 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X: pd.DataFrame, y=None, **fit_params):
         self.check_dataframe(X)
+        
+        y = np.array(y)
 
         self._col_transformer = self.load_cols_transformer(df=X)
         self._imputer = None
@@ -618,6 +621,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
         X = self._col_transformer.transform(X=X)
 
         if self._imputer is not None:
+            y = np.array(y)
             X = self._imputer.fit_transform(X=X, y=y)
 
         X = pd.DataFrame(data=X, columns=self.get_feature_names_out).convert_dtypes()
@@ -791,6 +795,9 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self.get_feature_names_out = df.columns.tolist()
 
         self.check_dataframe(df)
+
+        # reorder
+        df = df.sort_values(by=['AccountId','CUSTOMER_ID','TX_DATETIME']).reset_index(drop=True)
 
         return df
 
@@ -1322,6 +1329,9 @@ def load_workflow(
     # Final Pipeline
     if isinstance(advanced_features, TransformerMixin):
         workflow_steps.append(('advanced_features',advanced_features))
+    
+    selector_variance = VarianceThreshold(threshold=5e-2)
+    workflow_steps.append(('variance_thres',selector_variance))
     
     if classifier is not None:
         to_df = ToDataframe()

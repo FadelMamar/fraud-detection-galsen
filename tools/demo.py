@@ -256,8 +256,8 @@ from shutil import rmtree
 from joblib import Memory
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.model_selection import TimeSeriesSplit
-from collections.abc import Iterable
 from typing import Sequence
+
 
 CURDIR = Path(__file__).parent
 cfg_path = CURDIR / "hyp_search_conf.py"
@@ -310,10 +310,11 @@ y_train = raw_data_train["TX_FRAUD"]
 # "histGradientBoosting",
 # "catboost",
 # 'lgbm',
-model_name = 'catboost' #
+model_name = 'clusterElastic' #
 model, model_cfgs = get_model(model_name, CONFIGS.models)
 model_cfg = sample_model_cfg(model_cfgs)
 model = instantiate_model(model, **model_cfg)
+
 
 
 workflow = load_workflow(
@@ -327,13 +328,13 @@ workflow = load_workflow(
         None,
     ],
     add_imputer=False,
-    feature_selector_name='selectkbest',  # "selectkbest",
+    feature_selector_name='None',  # "selectkbest", 'None'
     top_k_best=50,
     windows_size_in_days=[1, 7, 30],
-    cat_encoding_method='catboost',  # TODO try None
+    cat_encoding_method='binary',
     imputer_n_neighbors=9,
-    n_clusters=8,
-    do_pca=True,
+    n_clusters=0,
+    do_pca=False,
     verbose=True,
     n_jobs=1,
     add_fft=True,
@@ -341,7 +342,7 @@ workflow = load_workflow(
     use_nystrom=True,
     nystroem_components=50,
     nystroem_kernel="poly",
-    use_sincos=True,
+    use_sincos=False,
     use_spline=True,
     spline_degree=3,
     spline_n_knots=6,
@@ -354,7 +355,7 @@ X_train = raw_data_train.drop(columns=['TX_FRAUD'])
 print("score: ",workflow.fit(X=X_train,y=y_train).score(X=X_train,y=y_train))
 # workflow.predict(X_train)
 
-# X_train_processed = data_processor.fit_transform(X=X_train, y=y_train) #.score(X=raw_data_train,y=y_train)
+# X_train_processed = workflow.fit_transform(X=X_train, y=y_train) #.score(X=raw_data_train,y=y_train)
 # X_pred = data_processor.transform(raw_data_pred)
 
 # print('X_train.shape: ',X_train.shape)
@@ -362,16 +363,12 @@ print("score: ",workflow.fit(X=X_train,y=y_train).score(X=X_train,y=y_train))
 
 # print('Num NaN train', (X_train_processed==np.nan).sum())
 
-
 # model.fit(X_train_processed,y_train)
-
-# classifier = Pipeline(steps=[("data_processor", data_processor),('to_df',ToDataframe()), ("model", model)])
-
-# classifier.fit(X=X_train, y=y_train)
-# score = classifier.score(X=raw_data_train,y=y_train)
+# score = model.score(X_train_processed,y_train)
 
 
-params_config = {f"model__{k}":v for k,v in model_cfgs.items() if len(v)>1 and isinstance(v, Iterable)}
+
+params_config = {f"model__{k}":v for k,v in model_cfgs.items() if isinstance(v, Sequence)}
 
 
 # search_engine = RandomizedSearchCV(
@@ -386,37 +383,36 @@ params_config = {f"model__{k}":v for k,v in model_cfgs.items() if len(v)>1 and i
 #     verbose=True,
 # )
 
-# import optuna
-# from optuna.samplers import TPESampler
-# from collections.abc import Iterable
+import optuna
+from optuna.samplers import TPESampler
 
-# study = optuna.create_study(
-#     direction="maximize",
-#     sampler=TPESampler(multivariate=True, group=True),
-#     load_if_exists=True,
-# )
+study = optuna.create_study(
+    direction="maximize",
+    sampler=TPESampler(multivariate=True, group=True),
+    load_if_exists=True,
+)
 
-# cfg = dict()
-# for k, v in params_config.items():
-#     if isinstance(v, Sequence) and len(v)>1:
-#         cfg[k] = optuna.distributions.CategoricalDistribution(v)
+cfg = dict()
+for k, v in params_config.items():
+    if isinstance(v, Sequence):
+        cfg[k] = optuna.distributions.CategoricalDistribution(v)
 
-# search_engine = optuna.integration.OptunaSearchCV(
-#     workflow,
-#     param_distributions=cfg,
-#     cv=TimeSeriesSplit(n_splits=5, gap=5000),
-#     refit=True,
-#     n_jobs=1,
-#     study=study,
-#     scoring="f1",
-#     error_score="raise",
-#     max_iter=300,
-#     timeout=60 * 3,
-#     n_trials=5,
-#     # random_state=41,
-#     verbose=True,
-# )
+search_engine = optuna.integration.OptunaSearchCV(
+    workflow,
+    param_distributions=cfg,
+    cv=TimeSeriesSplit(n_splits=5, gap=5000),
+    refit=True,
+    n_jobs=1,
+    study=study,
+    scoring="f1",
+    error_score="raise",
+    max_iter=300,
+    timeout=60 * 3,
+    n_trials=5,
+    # random_state=41,
+    verbose=True,
+)
 
-# search_engine.fit(X=X_train, y=y_train)
+search_engine.fit(X=X_train, y=y_train)
 
 # print(search_engine.best_estimator_)

@@ -43,6 +43,8 @@ from pyod.models.ae1svm import AE1SVM
 from pyod.models.mo_gaal import MO_GAAL
 from collections import OrderedDict
 
+from fraudetect.modeling.models import ClusterElasticClassifier
+
 
 # %% data aug - pyod
 outliers_detectors = dict()
@@ -275,6 +277,18 @@ C = np.logspace(-1,5,50).tolist()
 n_estimators = np.linspace(3, 40, 30).round().astype(int).tolist()
 max_depth = np.linspace(3, 30, 20).round().astype(int).tolist()
 
+# own models
+models["clusterElastic"] = dict(
+    en_l1_ratio=np.linspace(0.1, 0.9, 10).round(3).tolist(),
+    random_state=[41],
+    n_clusters=np.arange(3,11).tolist(),
+    base_estimator=DecisionTreeClassifier(max_depth=5,
+                                        class_weight='balanced',
+                                        max_features=None),
+    model=ClusterElasticClassifier,
+)
+
+# sklearn-like models
 models["logisticReg"] = dict(
     penalty=["l2"],
     C=C,
@@ -380,7 +394,7 @@ models["mlp"] = dict(
 models["decisionTree"] = dict(
     criterion=["entropy", "gini"],
     splitter=["best"],
-    max_depth=[5, 10, 15, 20, 25],
+    max_depth=max_depth,
     min_samples_split=[2,],
     min_samples_leaf=[1,],
     class_weight=[
