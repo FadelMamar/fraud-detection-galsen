@@ -17,6 +17,13 @@ from category_encoders import (
     TargetEncoder,
     WOEEncoder
 )
+from copy import deepcopy
+from typing import Optional, Union, List
+from feature_engine.encoding import StringSimilarityEncoder
+from feature_engine.selection import DropFeatures,DropConstantFeatures
+from sklearn.utils.validation import check_is_fitted
+from feature_engine.dataframe_checks import _check_optional_contains_na
+# import spacy
 from group_lasso import GroupLasso
 from sklearn.utils._param_validation import Interval
 from sklearn.compose import ColumnTransformer, make_column_selector
@@ -60,13 +67,10 @@ def load_cat_encoding(
     woe_randomized=True,
     woe_sigma=0.05,
     woe_regularization=1.0,
+    nlp_model_name: str = 'en_core_web_md',
 
 ):
-    cat_encodings = ["binary", "count", "hashing", "base_n", "catboost","target_enc", "woe"]
-
-    if cat_encoding_method not in cat_encodings:
-        raise KeyError(f"cat_encoding_method should be in {cat_encodings}")
-
+    
     if cat_encoding_method == "binary":
         return BinaryEncoder(
             handle_missing=handle_missing,
@@ -101,6 +105,7 @@ def load_cat_encoding(
             handle_unknown=handle_unknown,
             base=base,
         )
+    
     elif cat_encoding_method == "catboost":
         return CatBoostEncoder(
             return_df=return_df,
@@ -129,6 +134,17 @@ def load_cat_encoding(
             randomized=woe_randomized,
             sigma=woe_sigma,
             regularization=woe_regularization
+        )
+
+    elif cat_encoding_method == "similarity":
+        return SpaCySimilarityEncoder(nlp_model_name=nlp_model_name,
+                                      missing_values='ignore',
+                                      variables=cols,
+                                      )
+    
+    else: 
+        raise NotImplementedError(
+            f"cat_encoding_method {cat_encoding_method} is not implemented."
         )
 
 
@@ -317,6 +333,85 @@ def load_transforms_pyod(
     return transform_func
 
 
+class SpaCySimilarityEncoder(StringSimilarityEncoder):
+    """
+    SpaCySimilarityEncoder variant that uses spaCy's vector-based .similarity()
+    in place of the default character-matching formula.
+    """ 
+
+    def __init__(
+        self,
+        nlp_model_name = 'en_core_web_md',
+        **kwargs
+    ):
+        
+        super().__init__(**kwargs)
+        import spacy
+        self.nlp_model_name = nlp_model_name
+        self.nlp = spacy.load(nlp_model_name)
+    
+    def compute_similarity(self, s1: str, s2: str) -> float:
+        """
+        Override the default 2*M/T similarity with spaCy's doc.similarity().
+        """
+        # spaCy returns a float in [0,1] (if vectors are normalized).
+        s1 = str(s1).replace("nan", "")
+        s2 = str(s2).replace("nan", "")
+        doc1 = self.nlp(s1)
+        doc2 = self.nlp(s2)
+        # Handle missing vectors: similarity=0 if doc2 has no vector
+        if (not doc1.has_vector) or (not doc2.has_vector):
+            return 0.0
+        return float(doc1.similarity(doc2))
+    
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """
+        Replaces the categorical variables with the similarity variables.
+
+        Parameters
+        ----------
+        X: pandas dataframe of shape = [n_samples, n_features]
+            The data to transform.
+
+        Returns
+        -------
+        X_new: pandas dataframe.
+            The transformed dataframe. The shape of the dataframe will be different from
+            the original as it includes the similarity variables in place of the
+            original categorical ones.
+        """
+
+        X = X.copy() #.reset_index(drop=True)
+
+        check_is_fitted(self)
+        X = self._check_transform_input_and_state(X)
+        if self.missing_values == "raise":
+            _check_optional_contains_na(X, self.variables_)
+
+        _compute_similarity = self.compute_similarity #np.vectorize(self.compute_similarity)
+
+        new_values = []
+        for var in self.variables_:
+            if self.missing_values == "impute":
+                X[var] = X[var].astype(str).replace("nan", "")
+            categories = X[var].dropna().astype(str).unique()
+            column_encoder_dict = {
+                x: _compute_similarity(x, self.encoder_dict_[var]) for x in categories
+            }
+            column_encoder_dict["nan"] = [np.nan] * len(self.encoder_dict_[var])
+            encoded = np.vstack(X[var].astype(str).map(column_encoder_dict).values)
+            if self.missing_values == "ignore":
+                encoded[X[var].isna(), :] = np.nan
+            new_values.append(encoded)
+
+        try:
+            new_features = self._get_new_features_name()
+            X.loc[:, new_features] = np.hstack(new_values)
+        except ValueError:
+            print(new_features, np.hstack(new_values).shape)
+
+        return X.drop(self.variables_, axis=1)
+
 class ColumnDropper(TransformerMixin, BaseEstimator):
     _parameter_constraints = {
         "cols_to_drop": [
@@ -377,7 +472,7 @@ class ToDataframe(TransformerMixin, BaseEstimator):
         if isinstance(X, pd.DataFrame):
             self._cols = X.columns
         else:
-            self._cols = [f"col_{i}" for i in range(X.shape[1])]
+            self._cols = [f"to_df_{i}" for i in range(X.shape[1])]
         
         self.n_features_in_ = X.shape[1]
         self.is_fitted_ = True
@@ -451,7 +546,7 @@ class OutlierDetector(TransformerMixin, BaseEstimator):
 class DimensionReduction(TransformerMixin, BaseEstimator):
     _parameter_constraints = {
         "feature_selector_name": [str],
-        "estimator": [BaseEstimator],
+        # "estimator": [BaseEstimator],
         "n_splits": [int],
         "cv_gap": [int],
         "n_features_to_select": [int],
@@ -469,7 +564,7 @@ class DimensionReduction(TransformerMixin, BaseEstimator):
         self,
         feature_selector_name: str = "selectkbest",
         k_score_func=mutual_info_classif,
-        estimator=DecisionTreeClassifier(),
+        estimator=None,#DecisionTreeClassifier(),
         n_splits=5,
         cv_gap=5000,
         n_features_to_select=3,
@@ -634,6 +729,8 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X: pd.DataFrame, y=None, **fit_params):
         self.check_dataframe(X)
+
+        X = X.copy()
         
         y = np.array(y)
 
@@ -660,6 +757,8 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
     def transform(self, X: pd.DataFrame, y=None):
         self.check_dataframe(X)
+
+        X = X.copy()
 
         X = self._col_transformer.transform(X=X)
 
@@ -806,8 +905,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         # reset index > causes issues when doing cross-val
         df = X.copy().reset_index(drop=True)
-
-        # df = df.sort_values(by=["TX_DATETIME"])
 
         if all([col is not None for col in self.uid_cols]):
             df = self._create_unique_identifier(df)
@@ -995,6 +1092,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df["Provider_Product"] = (
             df["ProviderId"].astype(str) + "_" + df["ProductId"].astype(str)
         )
+
         return df
 
     def _add_temporal_identity_interactions(self, df):
@@ -1441,7 +1539,17 @@ class KendallInteractionFilter(SelectorMixin, BaseEstimator):
 
 
 class PolyInteractions(TransformerMixin, BaseEstimator):
-    def __init__(self, cat_cols=None, cat_encoder=None, degree=2):
+
+    _parameter_constraints = {
+        "cat_cols": [
+            "array-like",
+            Interval(Integral, 1, None, closed="left"),
+        ],
+        "degree": [int],
+        "cat_encoder":[TransformerMixin]
+    }
+
+    def __init__(self, cat_cols:list=None, cat_encoder=None, degree=2):
         self.cat_cols = cat_cols
         self.cat_encoder = cat_encoder        
         self.degree = degree
@@ -1450,26 +1558,46 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
         assert X.isna().sum().sum() < 1, "Found NaN values"
         assert "TX_FRAUD" not in X.columns, "Please drop TX_FRAUD column"
+        for col in self.cat_cols:
+            assert col in X.columns, f'{col} is not in the columns. Review the pipeline'
 
     def fit_transform(self, X, y=None, **fit_params):
         self.fit(X=X, y=y, **fit_params)
         return self.transform(X=X, y=y)
 
+    def get_feature_names_out(self,input_features=None):
+        return self._feature_name_out
+    
+    def to_dataframe(self,X,name="col"):
+
+        if not isinstance(X,pd.DataFrame):
+            X = pd.DataFrame(X,columns=[f"{name}_{i}" for i in range(X.shape[1])])
+        
+        return X
+
     def fit(self, X, y=None):
+
+        X = X.copy()
 
         self.check_dataframe(X=X)
         X = X.reset_index(drop=True)
 
-        self._poly = PolynomialFeatures(degree=self.degree, interaction_only=True, include_bias=False)
-
         self._numeric_cols = X.select_dtypes(include='number').columns.tolist()
 
-        X_encoded = np.hstack([self.cat_encoder.fit_transform(X[self.cat_cols],y=y),
-                               X[self._numeric_cols].values
-                               ]
-                            )
+        X_encoded = self.cat_encoder.fit_transform(X[self.cat_cols],y=y)
+
+        X_encoded = self.to_dataframe(X_encoded)
         
-        self._poly.fit(X_encoded)
+        _cat_cols = X_encoded.columns.tolist()
+
+        X_encoded = pd.concat([X_encoded,X[self._numeric_cols]],axis=1)
+        
+        _poly = PolynomialFeatures(degree=self.degree, interaction_only=True, include_bias=False)
+        self._interactor = ColumnTransformer(transformers=[('poly_interact',_poly, _cat_cols + self._numeric_cols)],
+                                                            remainder='passthrough',
+                                                            verbose_feature_names_out=False)
+        
+        self._interactor.fit(X_encoded)
         
         self.feature_names_in_ = X.columns.tolist()
         self.n_features_in_ = len(self.feature_names_in_)
@@ -1479,23 +1607,29 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
 
     def transform(self, X,y=None):
 
+        X = X.copy()
+
         self.check_dataframe(X=X)
         X = X.reset_index(drop=True)
 
         try:
-            cat_encoded = self.cat_encoder.transform(X=X[self.cat_cols],y=y)
+            X_encoded = self.cat_encoder.transform(X=X[self.cat_cols],y=y)
         except:
-            cat_encoded = self.cat_encoder.transform(X=X[self.cat_cols])
+            X_encoded = self.cat_encoder.transform(X=X[self.cat_cols])
 
-        X_encoded = np.hstack([cat_encoded,
-                               X[self._numeric_cols].values
-                               ]
-                            )
+        X_encoded = self.to_dataframe(X_encoded)
+
+        X_encoded = pd.concat([X_encoded,X[self._numeric_cols]],axis=1)
         
-        poly_out = self._poly.transform(X=X_encoded)
+        poly_out = self._interactor.transform(X=X_encoded)
+        poly_out = self.to_dataframe(poly_out,name='poly_inter')
 
-        return poly_out
+        self._feature_name_out = poly_out.columns.tolist()
 
+        return  poly_out
+
+
+    
 
 def load_workflow(
         classifier=None,
@@ -1522,8 +1656,14 @@ def load_workflow(
     seq_n_features_to_select=3,
     windows_size_in_days=[1, 7, 30],
     cat_encoding_method: str | None = "binary",
+    cat_similarity_encode:list=None,
+    nlp_model_name='en_core_web_md',
     cat_encoding_kwargs={},
-    cluster_on_feature="CUSTOMER_ID",
+    cluster_on_feature="AccountId",
+    add_poly_interactions=False,
+    interaction_cat_cols=None,
+    poly_degree=2,
+    poly_cat_encoder_name="catboost",
     imputer_n_neighbors=9,
     add_fft=False,
     add_seasonal_features=False,
@@ -1562,12 +1702,18 @@ def load_workflow(
     )
     
     workflow_steps = [('feature_engineer', feature_engineer)]
+    workflow_steps.append(('dropper',DropFeatures(cols_to_drop)))
 
-    # drop columns
-    if cols_to_drop is not None:
-        dropper = ColumnDropper(cols_to_drop=cols_to_drop)
-        workflow_steps.append(('dropper',dropper))
-    
+    # similarity based encoding 
+    if cat_similarity_encode is not None:
+        assert len(set(cat_similarity_encode) & set(cols_to_drop)) == 0, "cat_similarity_encode cols must not be in cols_to_drop"
+        assert isinstance(cat_similarity_encode,Sequence), "It should be a list of columns to encode"
+        similarity_encoder = load_cat_encoding(cat_encoding_method='similarity',
+                                                cols=cat_similarity_encode,
+                                                nlp_model_name=nlp_model_name,
+                                                )
+        workflow_steps.append(('similarity_encoder',similarity_encoder))        
+        
     # encodes features and impute missing values
     encoder = FeatureEncoding(
         add_imputer=add_imputer,
@@ -1578,7 +1724,29 @@ def load_workflow(
         onehot_threshold=onehot_threshold,
     )
     
-    workflow_steps.append(('encoder',encoder))
+    # create interaction features
+    if add_poly_interactions:
+        assert len(set(cat_similarity_encode) & set(interaction_cat_cols)) == 0, "cat_similarity_encode columns must not be in interaction_cat_cols"
+        interactor = PolyInteractions(
+            cat_cols=interaction_cat_cols,
+            cat_encoder=load_cat_encoding(cat_encoding_method=poly_cat_encoder_name,
+                                          hash_n_components=12,
+                                          base=10,
+                                          return_df=True,
+                                          drop_invariant=True),
+            degree=poly_degree,
+        )
+        
+        encoder_interactor = FeatureUnion(
+                        transformer_list=[('poly_interact',interactor),
+                                          ('encoder',encoder),
+                                        ], 
+                        n_jobs=n_jobs
+                    )
+        workflow_steps.append(('encode-and-interact', encoder_interactor)) 
+
+    else:
+        workflow_steps.append(('encoder',encoder))
     
     # get advanced features -> PCA, feature selection + outliers scores
     advanced_features = []
@@ -1625,19 +1793,10 @@ def load_workflow(
           
     # Final Pipeline
     if isinstance(advanced_features, TransformerMixin):
+        workflow_steps.append(('to_df_1',ToDataframe()))
         workflow_steps.append(('advanced_features',advanced_features))
     
-    # drop features with very low variance <5%
-    # selector_variance = VarianceThreshold(threshold=5e-2)
-    # selector_variance = ColumnTransformer(transformers=[('variance_thres',
-    #                                                      selector_variance,
-    #                                                      make_column_selector(dtype_include=['number']))
-    #                                                     ],
-    #                                       remainder='passthrough',
-    #                                       verbose_feature_names_out=False
-    #                                     )
-    # workflow_steps.append(('to_df_1',ToDataframe()))
-    # workflow_steps.append(('variance_thres',selector_variance))
+    workflow_steps.append(('drop_constant',DropConstantFeatures(tol=0.95,missing_values='ignore')))
     
     if classifier is not None:
         to_df = ToDataframe()
