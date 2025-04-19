@@ -77,16 +77,27 @@ class Arguments:
     n_jobs: int = 8
     scoring: str = "f1"
     cat_encoding_method: str = "binary"  # count, binary, base_n, hashing, 'None'
+    cat_encoding_methods: Sequence = ('binary','catboost','hashing',
+                                      'count','base_n','target_enc',
+                                      'woe','similarity')
     cat_encoding_base_n: int = 4
     cat_encoding_hash_method: str = "md5"
     cat_encoding_hash_n_components: int = 8
     add_imputer: bool = False
+    imputer_n_neighbors:int=9
+    uid_col_name:str="CustomerUID"
     concat_features: Sequence = (
         None,
     )  # ("AccountId", "CUSTOMER_ID")  # or None to disable
     concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )
+
+    # cluster transactions
+    n_clusters: int = 0 
+    cluster_on_feature:int="AccountId"
+
+
     optuna_n_trials: int = 50
 
     add_fft:bool=False
@@ -96,6 +107,12 @@ class Arguments:
     use_spline:bool=False
 
     cols_to_drop: Sequence[str] = None
+    interaction_cat_cols: Sequence[str] = None
+    add_poly_interactions:bool=False
+    poly_degree:int=2
+    poly_cat_encoder_name:int="catboost"
+    cat_similarity_encode:Sequence=('ProductCategory',)
+    nlp_model_name:str='en_core_web_md'
     # training parameters
     # max_epochs: int = 50
     # learning_rate: float = 1e-3
