@@ -223,7 +223,9 @@ class Tuner(object):
         verbose: int = 0,
         cat_encoding_kwards: dict = {},
         feature_selector_kwargs: dict = {},
-        tune_threshold:bool=False
+        tune_threshold:bool=False,
+        iterate_cat_method:bool=False,
+        iterate_session_gap:bool=False,
     ):
         self.HYP_CONFIGS = None
 
@@ -241,6 +243,8 @@ class Tuner(object):
         self.feature_selector_kwargs = feature_selector_kwargs
         self.cat_encoding_kwards = cat_encoding_kwards
         self.selector = None
+        self.iterate_cat_method=iterate_cat_method
+        self.iterate_session_gap=iterate_session_gap
 
         raw_data_train = load_data(args.data_path)
         self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
@@ -334,23 +338,38 @@ class Tuner(object):
         model, models_config = get_model(model_name, self.HYP_CONFIGS.models)
         model = instantiate_model(
             model, **sample_model_cfg(models_config)
-        )        
+        )
+      
+        if self.iterate_cat_method:
+            cat_encoding_method = trial.suggest_categorical(
+                    "cat_encoding_method",
+                    ['binary','catboost','hashing','count',
+                     'base_n','target_enc','woe']  
+                )
+            if cat_encoding_method == 'base_n':
+                self.cat_encoding_kwards['base'] = trial.suggest_int(
+                    "base", 3, 10, 1
+                )
+            elif cat_encoding_method == 'hashing':
+                self.cat_encoding_kwards['hash_n_components'] = 12
+        else:
+            #set handle categorical variables
+            cat_encoding_method = self.args.cat_encoding_method
 
-        # set handle categorical variables
-        cat_encoding_method = self.args.cat_encoding_method
-        if model_name == "histGradientBoosting":
-            model.set_params(categorical_features="from_dtype")
-        elif model_name == "catboost":
-            cat_encoding_method = 'catboost'
-        elif model_name == 'xgboost':
-            model.set_params(enable_categorical=True)
+            if model_name == "histGradientBoosting":
+                model.set_params(categorical_features="from_dtype")
+            elif model_name == "catboost":
+                cat_encoding_method = 'catboost'
+            elif model_name == 'xgboost':
+                model.set_params(enable_categorical=True)
 
-        if str(self.args.cat_encoding_method) == 'None':
-            if model_name not in ['catboost','xgboost','histGradientBoosting','lgbm']:
-                # raise ValueError("The provided model does not support un-encoded categorical variables")
-                cat_encoding_method = 'binary'
-                print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} categorical variable encoder.")
-            
+            if str(self.args.cat_encoding_method) == 'None':
+                if model_name not in ['catboost','xgboost','histGradientBoosting','lgbm']:
+                    # raise ValueError("The provided model does not support un-encoded categorical variables")
+                    cat_encoding_method = 'binary'
+                    print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} categorical variable encoder.")
+        
+
         # PCA
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
         pca_n_components = None
@@ -415,6 +434,13 @@ class Tuner(object):
             
         if advanced_transformation['use_nystrom']:
             advanced_transformation['nystroem_components'] = trial.suggest_int("nystroem_components", 5, 50, 5)
+        
+        # session gap
+        session_gap_minutes = self.args.session_gap_minutes
+        if self.iterate_session_gap:
+            session_gap_minutes = trial.suggest_int(
+                "session_gap_minutes", 60 * 1, 60 * 24, 60
+            )
 
 
         feature_select_estimator = DecisionTreeClassifier(
@@ -432,7 +458,7 @@ class Tuner(object):
             cv_gap=self.args.cv_gap,
             reorder_by=self.args.reorder_by,
             n_splits=self.args.n_splits,
-            session_gap_minutes=self.args.session_gap_minutes,
+            session_gap_minutes=session_gap_minutes,
             uid_cols=self.args.concat_features,
             feature_selector_name=feature_selector_name,
             seq_n_features_to_select=selector_cfg.get("n_features_to_select", 3),
@@ -483,7 +509,7 @@ class Tuner(object):
                         cv=TimeSeriesSplit(n_splits=self.args.n_splits,
                                            gap=self.args.cv_gap),
                         scoring=self.args.scoring, #evaluate
-                        error_score='raise',
+                        error_score=np.nan,
                         n_jobs=self.args.n_jobs,
                         pre_dispatch=self.args.n_jobs,
                     )
@@ -498,6 +524,8 @@ class Tuner(object):
         estimators_cv_splits = results['estimator']
         fitness = np.mean(scores)
         self.save_checkpoint(model_name=model_name, score=fitness, results=estimators_cv_splits)
+
+        return fitness
 
         # #-- cv gridsearch
         # results = self._run(
@@ -521,7 +549,7 @@ class Tuner(object):
             # print(results, "\n")
             # score = 0
 
-        if isinstance(self.args.scoring,Sequence):
-            return tuple(scores)
-        else:
-            return scores
+        # if isinstance(self.args.scoring,Sequence):
+        #     return tuple(scores)
+        # else:
+        #     return scores
