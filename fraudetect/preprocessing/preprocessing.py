@@ -132,7 +132,7 @@ def load_cols_transformer(
         ]
 
     col_transformer = ColumnTransformer(
-        transformers, remainder="passthrough", n_jobs=n_jobs, verbose=False
+        transformers, remainder="passthrough", n_jobs=n_jobs, verbose=False,verbose_feature_names_out=False
     )
 
     return col_transformer
@@ -585,7 +585,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
             ]
 
         col_transformer = ColumnTransformer(
-            transformers, remainder="passthrough", n_jobs=self.n_jobs, verbose=False
+            transformers, remainder="passthrough", n_jobs=self.n_jobs, verbose=False,verbose_feature_names_out=False
         )
 
         return col_transformer
@@ -942,11 +942,11 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df["Channel_ProductCategory"] = (
             df["ChannelId"].astype(str) + "_" + df["ProductCategory"].astype(str)
         )
-        # df['ProductCategory_Account'] = df['ProductCategory'].astype(str) + "_" + df['AccountId'].astype(str)
+        df['ProductCategory_Account'] = df['ProductCategory'].astype(str) + "_" + df['AccountId'].astype(str)
         # df['ProductCategory_Customer'] = df['ProductCategory'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
-        df["Country_Currency"] = (
-            df["CountryCode"].astype(str) + "_" + df["CurrencyCode"].astype(str)
-        )
+        # df["Country_Currency"] = (
+        #     df["CountryCode"].astype(str) + "_" + df["CurrencyCode"].astype(str)
+        # )
         df["Channel_PricingStrategy"] = (
             df["ChannelId"].astype(str) + "_" + df["PricingStrategy"].astype(str)
         )
@@ -961,13 +961,13 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             str
         )
         df["Hour_Channel"] = df["Hour"].astype(str) + "_" + df["ChannelId"].astype(str)
-        # df['Hour_Account'] = df['Hour'].astype(str) + "_" + df['AccountId'].astype(str)
+        df['Hour_Account'] = df['Hour'].astype(str) + "_" + df['AccountId'].astype(str)
         # df['Hour_Customer'] = df['Hour'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
-        # df['DayOfWeek_Account'] = df['DayOfWeek'].astype(str) + "_" + df['AccountId'].astype(str)
+        df['DayOfWeek_Account'] = df['DayOfWeek'].astype(str) + "_" + df['AccountId'].astype(str)
         # df['DayOfWeek_Customer'] = df['DayOfWeek'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
-        df["Country_Hour"] = (
-            df["CountryCode"].astype(str) + "_" + df["Hour"].astype(str)
-        )
+        # df["Country_Hour"] = (
+        #     df["CountryCode"].astype(str) + "_" + df["Hour"].astype(str)
+        # )
         return df
 
     def _add_frequency_features(self, df):
@@ -1339,16 +1339,16 @@ def load_workflow(
         workflow_steps.append(('advanced_features',advanced_features))
     
     # drop features with very low variance <5%
-    selector_variance = VarianceThreshold(threshold=5e-2)
-    selector_variance = ColumnTransformer(transformers=[('variance_thres',
-                                                         selector_variance,
-                                                         make_column_selector(dtype_include=['number']))
-                                                        ],
-                                          remainder='passthrough',
-                                          verbose_feature_names_out=False
-                                        )
-    workflow_steps.append(('to_df_1',ToDataframe()))
-    workflow_steps.append(('variance_thres',selector_variance))
+    # selector_variance = VarianceThreshold(threshold=5e-2)
+    # selector_variance = ColumnTransformer(transformers=[('variance_thres',
+    #                                                      selector_variance,
+    #                                                      make_column_selector(dtype_include=['number']))
+    #                                                     ],
+    #                                       remainder='passthrough',
+    #                                       verbose_feature_names_out=False
+    #                                     )
+    # workflow_steps.append(('to_df_1',ToDataframe()))
+    # workflow_steps.append(('variance_thres',selector_variance))
     
     if classifier is not None:
         to_df = ToDataframe()
