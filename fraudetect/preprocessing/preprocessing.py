@@ -14,8 +14,10 @@ from category_encoders import (
     HashingEncoder,
     BaseNEncoder,
     CatBoostEncoder,
+    TargetEncoder,
+    WOEEncoder
 )
-
+from group_lasso import GroupLasso
 from sklearn.utils._param_validation import Interval
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.impute import KNNImputer
@@ -26,9 +28,11 @@ from sklearn.feature_selection import (
     VarianceThreshold,
     SequentialFeatureSelector,
     SelectKBest,
-    f_classif,
     mutual_info_classif,
+    SelectorMixin
 )
+from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures
+from scipy.stats import kendalltau
 from sklearn.decomposition import PCA
 from sklearn.kernel_approximation import Nystroem
 from sklearn.pipeline import Pipeline, FeatureUnion, make_pipeline
@@ -53,8 +57,12 @@ def load_cat_encoding(
     drop_invariant=False,
     handle_unknown="value",
     base: int = 4,
+    woe_randomized=True,
+    woe_sigma=0.05,
+    woe_regularization=1.0,
+
 ):
-    cat_encodings = ["binary", "count", "hashing", "base_n", "catboost"]
+    cat_encodings = ["binary", "count", "hashing", "base_n", "catboost","target_enc", "woe"]
 
     if cat_encoding_method not in cat_encodings:
         raise KeyError(f"cat_encoding_method should be in {cat_encodings}")
@@ -100,6 +108,27 @@ def load_cat_encoding(
             handle_missing=handle_missing,
             drop_invariant=drop_invariant,
             handle_unknown=handle_unknown,
+        )
+    
+    elif cat_encoding_method == "target_enc":
+        return TargetEncoder(
+            return_df=return_df,
+            cols=cols,
+            handle_missing=handle_missing,
+            drop_invariant=drop_invariant,
+            handle_unknown=handle_unknown,
+        )
+    
+    elif cat_encoding_method == "woe":
+        return WOEEncoder(
+            return_df=return_df,
+            cols=cols,
+            handle_missing=handle_missing,
+            drop_invariant=drop_invariant,
+            handle_unknown=handle_unknown,
+            randomized=woe_randomized,
+            sigma=woe_sigma,
+            regularization=woe_regularization
         )
 
 
@@ -149,9 +178,13 @@ def load_feature_selector(
     top_k_best: int = 10,
     scoring: str = "f1",
     k_score_func=mutual_info_classif,
+    group_lasso_alpha:float=1e-2,
     n_jobs: int = 4,
     verbose: bool = False,
 ) -> Pipeline:
+    
+    selector = None
+
     if name == "rfecv":
         selector = RFECV(
             estimator=estimator,
@@ -174,6 +207,13 @@ def load_feature_selector(
 
     elif name == "selectkbest":
         selector = SelectKBest(score_func=k_score_func, k=top_k_best)
+
+    elif name == "grouplasso":
+        selector = GroupLasso(alpha=group_lasso_alpha)
+    
+    elif name == "kendallfilter":
+        selector = KendallInteractionFilter(top_k=top_k_best)
+
     else:
         raise NotImplementedError
 
@@ -552,6 +592,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
     def check_dataframe(self, X: pd.DataFrame):
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
         assert X.isna().sum().sum() < 1, "Found NaN values"
+        assert "TX_FRAUD" not in X.columns, "Please drop TX_FRAUD column"
 
     def load_cols_transformer(self, df: pd.DataFrame):
         # scalers
@@ -714,6 +755,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
     def check_dataframe(self, X: pd.DataFrame):
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
         assert X.isna().sum().sum() < 1, "Found NaN values"
+        assert "TX_FRAUD" not in X.columns, "Please drop TX_FRAUD column"
 
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X: pd.DataFrame, y, **fit_params):
@@ -1206,6 +1248,253 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df.replace([np.inf, -np.inf], 0, inplace=True)
 
         return df
+
+# TODO: debug
+class GroupLassoFeatureSelector(SelectorMixin, BaseEstimator):
+    """
+    Group Lasso-based feature selector for mixed categorical and numerical data.
+    Inherits from SelectorMixin for seamless pipeline integration.
+
+    Parameters
+    ----------
+    alpha : float, default=0.01
+        Regularization strength for group lasso.
+    """
+    def __init__(self, alpha=0.01):
+        self.alpha = alpha
+        self.scaler = StandardScaler()
+        
+        self.model = None
+        self.selected_idx_ = None
+        self.groups_ = None
+        self.feature_names_in_ = None
+        self.feature_names_encoded_ = None
+
+    def fit(self, X, y=None):  # noqa: D102
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("Input X must be a pandas DataFrame")
+        
+        X = X.reset_index(drop=True)
+
+        self.feature_names_in_ = list(X.columns)
+        
+        # Identify categorical columns
+        cat_cols = X.select_dtypes(include='category').columns.tolist()
+
+        # Encode categoricals
+        self._encoder = BinaryEncoder(drop_invariant=True,return_df=True)
+        if cat_cols:
+            X_cat = self._encoder.fit_transform(X[cat_cols],y=y)
+        else:
+            raise ValueError("No columns found in the DataFrame with dtype='category'")
+
+        # Numeric features
+        X_num = X.drop(columns=cat_cols, errors='ignore')
+        # Combine encoded and numeric
+        X_encoded = pd.concat([X_num, X_cat], axis=1)
+        self.feature_names_encoded_ = list(X_encoded.columns)
+
+        # Build group assignments
+        groups = []
+        # Numeric columns: no regularization
+        for _ in X_num.columns:
+            groups.append(-1)
+        # Categorical binary columns: each original category gets a group
+        for col in X_cat.columns:
+            orig = col.split('_')[0]
+            # group index is the position of orig in cat_cols + 1
+            grp = cat_cols.index(orig) + 1
+            groups.append(grp)
+        self.groups_ = groups
+
+        # Scale and fit GroupLasso
+        X_scaled = self.scaler.fit_transform(X_encoded)
+        self.model = GroupLasso(
+            groups=self.groups_,
+            group_reg=self.alpha,
+            l1_reg=0.0,
+            scale_reg='none',
+            supress_warning=True
+        )
+        self.model.fit(X_scaled, y)
+
+        # Selected feature indices in encoded space
+        coef = np.ravel(self.model.coef_)
+        self.selected_idx_ = np.where(coef != 0)[0]
+        return self
+
+    def _get_support_mask(self):  # noqa: D105
+        # Boolean mask for encoded features
+        mask = np.zeros(len(self.feature_names_encoded_), dtype=bool)
+        mask[self.selected_idx_] = True
+        return mask
+
+    def transform(self, X):  
+
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("Input X must be a pandas DataFrame")
+        
+        X = X.reset_index(drop=True)
+        
+        # Repeat encoding and scaling
+        cat_cols = X.select_dtypes(include='category').columns.tolist()
+        if cat_cols:
+            X_cat = self._encoder.transform(X[cat_cols])
+        else:
+            raise ValueError("No columns found in the DataFrame with dtype='category'")
+        
+        X_num = X.drop(columns=cat_cols, errors='ignore')
+        X_encoded = pd.concat([X_num, X_cat], axis=1)
+        X_scaled = self.scaler.transform(X_encoded)
+
+        # Apply support mask
+        mask = self._get_support_mask()
+        return X_scaled[:, mask]
+
+    def get_support(self, indices=False, **kwargs):  # noqa: D105
+        mask = self._get_support_mask()
+        if indices:
+            return np.where(mask)[0]
+        return mask
+
+    @property
+    def n_features_in_(self):
+        return len(self.self.feature_names_in_)
+
+    def feature_names_in(self):
+        return self.feature_names_in_
+    
+    def get_feature_names_out(input_features=None):
+        return 
+
+# TODO: debug
+class KendallInteractionFilter(SelectorMixin, BaseEstimator):
+    """
+    Selects top_k feature–feature interactions based on the Kendall Interaction Filter (KIF).
+
+    For each pair (i,j):
+      - τ_i  = Kendall’s τ between feature_i and target
+      - τ_j  = Kendall’s τ between feature_j and target
+      - τ_ij = Kendall’s τ between (feature_i * feature_j) and target
+      - Score = |τ_ij| - max(|τ_i|, |τ_j|)
+    The pairs with largest Score are kept.
+    """
+    def __init__(self, top_k=10):
+        self.top_k = top_k
+        self.selected_pairs_ = []
+
+    def fit(self, X, y):  # noqa: D102
+        X = np.asarray(X)
+        y = np.asarray(y)
+        n_features = X.shape[1]
+
+        # Compute main‐effect Kendall's taus
+        taus = np.zeros(n_features)
+        for i in range(n_features):
+            taus[i], _ = kendalltau(X[:, i], y)
+
+        # Score each interaction
+        scores = []
+        for i in range(n_features):
+            for j in range(i + 1, n_features):
+                interaction = X[:, i] * X[:, j]
+                tau_ij, _ = kendalltau(interaction, y)
+                score = abs(tau_ij) - max(abs(taus[i]), abs(taus[j]))
+                scores.append((score, i, j))
+
+        # Select top-k interactions
+        scores.sort(key=lambda x: x[0], reverse=True)
+        self.selected_pairs_ = scores[:self.top_k]
+        return self
+
+    def transform(self, X):  # noqa: D102
+        X = np.asarray(X)
+        n_samples = X.shape[0]
+        interactions = np.empty((n_samples, len(self.selected_pairs_)))
+        for idx, (_, i, j) in enumerate(self.selected_pairs_):
+            interactions[:, idx] = X[:, i] * X[:, j]
+        return interactions
+
+    def _get_support_mask(self):  # noqa: D105
+        # Flatten the pairs into a set of involved original features
+        selected_features = set()
+        for _, i, j in self.selected_pairs_:
+            selected_features.add(i)
+            selected_features.add(j)
+
+        mask = np.zeros((self.n_features_in_,), dtype=bool)
+        for idx in selected_features:
+            mask[idx] = True
+        return mask
+
+    def get_support_pairs(self):
+        """
+        Return list of selected (i, j) pairs.
+        """
+        return [(i, j) for _, i, j in self.selected_pairs_]
+
+    def get_feature_names_out(self, input_features=None):
+        """
+        Return names of generated interaction features.
+        """
+        return [f"int_{i}_{j}" for (_, i, j) in self.selected_pairs_]
+
+
+class PolyInteractions(TransformerMixin, BaseEstimator):
+    def __init__(self, cat_cols=None, cat_encoder=None, degree=2):
+        self.cat_cols = cat_cols
+        self.cat_encoder = cat_encoder        
+        self.degree = degree
+        
+    def check_dataframe(self, X: pd.DataFrame):
+        assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
+        assert X.isna().sum().sum() < 1, "Found NaN values"
+        assert "TX_FRAUD" not in X.columns, "Please drop TX_FRAUD column"
+
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X=X, y=y, **fit_params)
+        return self.transform(X=X, y=y)
+
+    def fit(self, X, y=None):
+
+        self.check_dataframe(X=X)
+        X = X.reset_index(drop=True)
+
+        self._poly = PolynomialFeatures(degree=self.degree, interaction_only=True, include_bias=False)
+
+        self._numeric_cols = X.select_dtypes(include='number').columns.tolist()
+
+        X_encoded = np.hstack([self.cat_encoder.fit_transform(X[self.cat_cols],y=y),
+                               X[self._numeric_cols].values
+                               ]
+                            )
+        
+        self._poly.fit(X_encoded)
+        
+        self.feature_names_in_ = X.columns.tolist()
+        self.n_features_in_ = len(self.feature_names_in_)
+        self.is_fitted_ = True
+
+        return self
+
+    def transform(self, X,y=None):
+
+        self.check_dataframe(X=X)
+        X = X.reset_index(drop=True)
+
+        try:
+            cat_encoded = self.cat_encoder.transform(X=X[self.cat_cols],y=y)
+        except:
+            cat_encoded = self.cat_encoder.transform(X=X[self.cat_cols])
+
+        X_encoded = np.hstack([cat_encoded,
+                               X[self._numeric_cols].values
+                               ]
+                            )
+        
+        poly_out = self._poly.transform(X=X_encoded)
+
+        return poly_out
 
 
 def load_workflow(
