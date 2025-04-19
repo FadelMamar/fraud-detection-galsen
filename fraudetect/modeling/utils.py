@@ -342,9 +342,7 @@ class Tuner(object):
       
         if self.iterate_cat_method:
             cat_encoding_method = trial.suggest_categorical(
-                    "cat_encoding_method",
-                    ['binary','catboost','hashing','count',
-                     'base_n','target_enc','woe']  
+                    "cat_encoding_method", self.args.cat_encoding_methods 
                 )
             if cat_encoding_method == 'base_n':
                 self.cat_encoding_kwards['base'] = trial.suggest_int(
@@ -446,7 +444,22 @@ class Tuner(object):
         feature_select_estimator = DecisionTreeClassifier(
             max_depth=15, max_features=None, random_state=41
         )
-              
+        poly_degree = None
+        if self.args.add_poly_interactions:
+            poly_degree = trial.suggest_categorical('poly_degree_interact',[1,self.args.poly_degree])
+
+        transfomations_2 = dict(
+                        cat_similarity_encode=self.args.cat_similarity_encode,
+                        nlp_model_name=self.args.nlp_model_name,
+                        add_poly_interactions=self.args.add_poly_interactions,
+                        interaction_cat_cols=self.args.interaction_cat_cols,
+                        poly_degree=poly_degree or self.args.poly_degree,
+                        poly_cat_encoder_name=self.args.poly_cat_encoder_name
+                        )
+        
+        advanced_transformation.update(transfomations_2)
+
+        #-- load workflow
         classifier = load_workflow(
             classifier=model,
             cols_to_drop=self.args.cols_to_drop,
@@ -465,8 +478,9 @@ class Tuner(object):
             windows_size_in_days=self.args.windows_size_in_days,
             cat_encoding_method=cat_encoding_method,
             cat_encoding_kwargs=self.cat_encoding_kwards,
-            imputer_n_neighbors=9,
-            n_clusters=0,
+            imputer_n_neighbors=self.args.imputer_n_neighbors,
+            n_clusters=self.args.n_clusters,
+            cluster_on_feature=self.args.cluster_on_feature,
             top_k_best=selector_cfg.get("k", 50),
             k_score_func=k_score_func,
             do_pca=do_pca,
@@ -509,7 +523,7 @@ class Tuner(object):
                         cv=TimeSeriesSplit(n_splits=self.args.n_splits,
                                            gap=self.args.cv_gap),
                         scoring=self.args.scoring, #evaluate
-                        error_score=np.nan,
+                        error_score='raise',
                         n_jobs=self.args.n_jobs,
                         pre_dispatch=self.args.n_jobs,
                     )
