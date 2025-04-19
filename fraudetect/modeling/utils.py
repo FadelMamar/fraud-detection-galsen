@@ -344,12 +344,12 @@ class Tuner(object):
             cat_encoding_method = 'catboost'
         elif model_name == 'xgboost':
             model.set_params(enable_categorical=True)
-        
+
         if str(self.args.cat_encoding_method) == 'None':
             if model_name not in ['catboost','xgboost','histGradientBoosting','lgbm']:
                 # raise ValueError("The provided model does not support un-encoded categorical variables")
                 cat_encoding_method = 'binary'
-                print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} encoder.")
+                print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} categorical variable encoder.")
             
         # PCA
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
@@ -483,7 +483,7 @@ class Tuner(object):
                         cv=TimeSeriesSplit(n_splits=self.args.n_splits,
                                            gap=self.args.cv_gap),
                         scoring=self.args.scoring, #evaluate
-                        error_score=np.nan,
+                        error_score='raise',
                         n_jobs=self.args.n_jobs,
                         pre_dispatch=self.args.n_jobs,
                     )

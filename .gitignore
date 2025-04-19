@@ -153,6 +153,7 @@ venv.bak/
 *.joblib
 
 runs*
+*.csv
 
 cachedir
 tools/catboost_info/
