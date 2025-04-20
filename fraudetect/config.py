@@ -86,7 +86,7 @@ class Arguments:
     add_imputer: bool = False
     imputer_n_neighbors:int=9
     uid_col_name:str="CustomerUID"
-    concat_features: Sequence = (
+    uid_cols: Sequence = (
         None,
     )  # ("AccountId", "CUSTOMER_ID")  # or None to disable
     concat_features_encoding_kwargs = dict(
@@ -111,8 +111,11 @@ class Arguments:
     add_poly_interactions:bool=False
     poly_degree:int=2
     poly_cat_encoder_name:int="catboost"
+    iterate_poly_cat_encoder_name:bool=False
+
     cat_similarity_encode:Sequence=('ProductCategory',)
     nlp_model_name:str='en_core_web_md'
+
     # training parameters
     # max_epochs: int = 50
     # learning_rate: float = 1e-3
