@@ -33,16 +33,11 @@ from ..detectors import get_detector, instantiate_detector
 #     import pandas as pd
 
 
-def evaluate(classifier, X, y):
-    metrics = ["f1", "average_precision", "precision", "recall"]
-    # out = dict()
-    # for metric in metrics:
-    #     scorer = get_scorer(metric)
-    #     score = scorer(classifier, X, y)
-    #     out[metric] = score
-    
+def evaluate(classifier, 
+             X, 
+             y, 
+             metrics = ["f1", "average_precision", "precision", "recall"]):
     out = {metric:get_scorer(metric)(classifier, X, y) for metric in metrics}
-
     return out
 
 
@@ -367,7 +362,6 @@ class Tuner(object):
                     cat_encoding_method = 'binary'
                     print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} categorical variable encoder.")
         
-
         # PCA
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
         pca_n_components = None
@@ -413,76 +407,82 @@ class Tuner(object):
                 feature_selector_name,
                 self.HYP_CONFIGS.feature_selector[feature_selector_name],
             )
+
             if feature_selector_name == 'selectkbest':
                 k_score_func = trial.suggest_categorical('selectkbest_score_func', self.HYP_CONFIGS.selectkbest_score_func.keys())
                 k_score_func = self.HYP_CONFIGS.selectkbest_score_func[k_score_func]
                     
-        # advanced features
+        # advanced features cfg
         advanced_transformation = dict(add_fft=self.args.add_fft,
                 add_seasonal_features=self.args.add_seasonal_features,
                 use_nystrom=self.args.use_nystrom,
                 use_sincos=self.args.use_sincos,
                 use_spline=self.args.use_spline,
         )
-        
         for k,v in advanced_transformation.items():
             advanced_transformation[k] = trial.suggest_categorical(
                                         k, [False, v],
                                     )
-            
         if advanced_transformation['use_nystrom']:
             advanced_transformation['nystroem_components'] = trial.suggest_int("nystroem_components", 5, 50, 5)
         
-        # session gap
+        # pca
+        advanced_transformation['pca_n_components']= pca_n_components or 20
+
+        # feature selector cfg
+        if k_score_func is not None:
+            advanced_transformation['k_score_func'] = k_score_func
+        advanced_transformation['top_k_best']= selector_cfg.get("k",50)
+        advanced_transformation['corr_method']=selector_cfg.get('method',"pearson")
+        advanced_transformation['corr_threshold']=selector_cfg.get('threshold',0.82)
+        advanced_transformation['scoring']=selector_cfg.get("scoring", "f1")
+        advanced_transformation['rfe_step']=selector_cfg.get("step", 3) 
+        advanced_transformation['seq_n_features_to_select']= selector_cfg.get("n_features_to_select", 3) 
+        advanced_transformation['feature_select_estimator']= DecisionTreeClassifier(max_depth=7, class_weight='balanced',
+                                                                                    max_features=None, random_state=41)        
+        
+        # session gap length
         session_gap_minutes = self.args.session_gap_minutes
         if self.iterate_session_gap:
-            session_gap_minutes = trial.suggest_int(
-                "session_gap_minutes", 60 * 1, 60 * 24, 60
+            session_gap_minutes = trial.suggest_categorical(
+                "session_gap_minutes", np.arange(3,24)*60
             )
-
-
-        feature_select_estimator = DecisionTreeClassifier(
-            max_depth=15, max_features=None, random_state=41
-        )
-        poly_degree = None
-        if self.args.add_poly_interactions:
-            poly_degree = trial.suggest_categorical('poly_degree_interact',[1,self.args.poly_degree])
-
-        transfomations_2 = dict(
-                        cat_similarity_encode=self.args.cat_similarity_encode,
-                        nlp_model_name=self.args.nlp_model_name,
-                        add_poly_interactions=self.args.add_poly_interactions,
-                        interaction_cat_cols=self.args.interaction_cat_cols,
-                        poly_degree=poly_degree or self.args.poly_degree,
-                        poly_cat_encoder_name=self.args.poly_cat_encoder_name
-                        )
         
-        advanced_transformation.update(transfomations_2)
+        # categorical-numerical interactions
+        do_poly_interact = trial.suggest_categorical("do_poly_interact", [False, self.args.add_poly_interactions])
+        if do_poly_interact:
+            poly_degree = trial.suggest_categorical('poly_degree_interact',[1,self.args.poly_degree])
+            if self.args.iterate_poly_cat_encoder_name:
+                poly_cat_encoder_name = trial.suggest_categorical('poly_cat_encoder_name',['woe','catboost','count','binary'])
+            else:
+                poly_cat_encoder_name = self.args.poly_cat_encoder_name
+            data_interaction_args = dict(
+                                        cat_similarity_encode=self.args.cat_similarity_encode,
+                                        nlp_model_name=self.args.nlp_model_name,
+                                        add_poly_interactions=self.args.add_poly_interactions,
+                                        interaction_cat_cols=self.args.interaction_cat_cols,
+                                        poly_degree=poly_degree or self.args.poly_degree,
+                                        poly_cat_encoder_name=poly_cat_encoder_name
+                            )
+            advanced_transformation.update(data_interaction_args)
 
         #-- load workflow
         classifier = load_workflow(
             classifier=model,
             cols_to_drop=self.args.cols_to_drop,
-            scoring=selector_cfg.get("scoring", "f1"),
-            feature_select_estimator=feature_select_estimator,
-            rfe_step=selector_cfg.get("step", 3),
-            pca_n_components=pca_n_components or 20,
             detector_list=detector_list,
             cv_gap=self.args.cv_gap,
             reorder_by=self.args.reorder_by,
             n_splits=self.args.n_splits,
             session_gap_minutes=session_gap_minutes,
-            uid_cols=self.args.concat_features,
+            uid_cols=self.args.uid_cols,
             feature_selector_name=feature_selector_name,
-            seq_n_features_to_select=selector_cfg.get("n_features_to_select", 3),
             windows_size_in_days=self.args.windows_size_in_days,
             cat_encoding_method=cat_encoding_method,
             cat_encoding_kwargs=self.cat_encoding_kwards,
             imputer_n_neighbors=self.args.imputer_n_neighbors,
             n_clusters=self.args.n_clusters,
             cluster_on_feature=self.args.cluster_on_feature,
-            top_k_best=selector_cfg.get("k", 50),
-            k_score_func=k_score_func,
             do_pca=do_pca,
             verbose=self.verbose,
             n_jobs=self.args.n_jobs,
