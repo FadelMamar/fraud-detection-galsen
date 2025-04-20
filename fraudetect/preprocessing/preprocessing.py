@@ -20,7 +20,7 @@ from category_encoders import (
 from copy import deepcopy
 from typing import Optional, Union, List
 from feature_engine.encoding import StringSimilarityEncoder
-from feature_engine.selection import DropFeatures,DropConstantFeatures
+from feature_engine.selection import DropFeatures,DropConstantFeatures,SmartCorrelatedSelection
 from sklearn.utils.validation import check_is_fitted
 from feature_engine.dataframe_checks import _check_optional_contains_na
 # import spacy
@@ -187,17 +187,19 @@ def load_feature_selector(
     n_features_to_select=10,
     cv: TimeSeriesSplit = TimeSeriesSplit(n_splits=5, gap=5000),
     estimator=DecisionTreeClassifier(
-        max_depth=15, max_features="sqrt", random_state=41
+        max_depth=15, max_features=None, random_state=41, class_weight="balanced"
     ),
     name: str = "selectkbest",
     rfe_step: int = 3,
     top_k_best: int = 10,
     scoring: str = "f1",
+    corr_method: str = "pearson", # pearson, spearman, kendall
+    corr_threshold:float=0.8,
     k_score_func=mutual_info_classif,
     group_lasso_alpha:float=1e-2,
     n_jobs: int = 4,
     verbose: bool = False,
-) -> Pipeline:
+) -> SelectorMixin:
     
     selector = None
 
@@ -210,6 +212,7 @@ def load_feature_selector(
             n_jobs=n_jobs,
             verbose=verbose,
         )
+    
     elif name == "sequential":
         selector = SequentialFeatureSelector(
             estimator=estimator,
@@ -225,15 +228,21 @@ def load_feature_selector(
         selector = SelectKBest(score_func=k_score_func, k=top_k_best)
 
     elif name == "grouplasso":
-        selector = GroupLasso(alpha=group_lasso_alpha)
+        selector = GroupLassoFeatureSelector(alpha=group_lasso_alpha)
     
-    elif name == "kendallfilter":
-        selector = KendallInteractionFilter(top_k=top_k_best)
+    elif name == "smartcorrelated":
+        selector = SmartCorrelatedSelection(method=corr_method,
+                                            threshold=corr_threshold,
+                                            selection_method="variance",
+                                            estimator=estimator,
+                                            cv=cv,
+                                            scoring=scoring
+                                        )
 
     else:
         raise NotImplementedError
 
-    return Pipeline(steps=[("feature_selector", selector)])
+    return selector
 
 
 def get_feature_selector(name: str, config: dict) -> dict:
@@ -342,10 +351,11 @@ class SpaCySimilarityEncoder(StringSimilarityEncoder):
     def __init__(
         self,
         nlp_model_name = 'en_core_web_md',
+        variables: Optional[Union[str, Sequence[str]]] = None,
         **kwargs
     ):
         
-        super().__init__(**kwargs)
+        super().__init__(variables=variables,**kwargs)
         import spacy
         self.nlp_model_name = nlp_model_name
         self.nlp = spacy.load(nlp_model_name)
@@ -388,7 +398,7 @@ class SpaCySimilarityEncoder(StringSimilarityEncoder):
         if self.missing_values == "raise":
             _check_optional_contains_na(X, self.variables_)
 
-        _compute_similarity = self.compute_similarity #np.vectorize(self.compute_similarity)
+        _compute_similarity = np.vectorize(self.compute_similarity)
 
         new_values = []
         for var in self.variables_:
@@ -407,10 +417,12 @@ class SpaCySimilarityEncoder(StringSimilarityEncoder):
         try:
             new_features = self._get_new_features_name()
             X.loc[:, new_features] = np.hstack(new_values)
-        except ValueError:
+            return X.drop(columns=self.variables_, axis=1)
+        except ValueError as exc:
             print(new_features, np.hstack(new_values).shape)
+            raise ValueError from exc
 
-        return X.drop(self.variables_, axis=1)
+        
 
 class ColumnDropper(TransformerMixin, BaseEstimator):
     _parameter_constraints = {
@@ -953,7 +965,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
     
     # ---------- Private Helper Methods ----------
     def _create_unique_identifier(self, df: pd.DataFrame):
-        df[self.uid_col_name] = df[self.uid_cols].apply(
+        df[self.uid_col_name] = df[list(self.uid_cols)].apply(
             lambda x: "+".join(x), axis=1, raw=False, result_type="reduce"
         )
 
@@ -1465,78 +1477,6 @@ class GroupLassoFeatureSelector(SelectorMixin, BaseEstimator):
     def get_feature_names_out(input_features=None):
         return 
 
-# TODO: debug
-class KendallInteractionFilter(SelectorMixin, BaseEstimator):
-    """
-    Selects top_k feature–feature interactions based on the Kendall Interaction Filter (KIF).
-
-    For each pair (i,j):
-      - τ_i  = Kendall’s τ between feature_i and target
-      - τ_j  = Kendall’s τ between feature_j and target
-      - τ_ij = Kendall’s τ between (feature_i * feature_j) and target
-      - Score = |τ_ij| - max(|τ_i|, |τ_j|)
-    The pairs with largest Score are kept.
-    """
-    def __init__(self, top_k=10):
-        self.top_k = top_k
-        self.selected_pairs_ = []
-
-    def fit(self, X, y):  # noqa: D102
-        X = np.asarray(X)
-        y = np.asarray(y)
-        n_features = X.shape[1]
-
-        # Compute main‐effect Kendall's taus
-        taus = np.zeros(n_features)
-        for i in range(n_features):
-            taus[i], _ = kendalltau(X[:, i], y)
-
-        # Score each interaction
-        scores = []
-        for i in range(n_features):
-            for j in range(i + 1, n_features):
-                interaction = X[:, i] * X[:, j]
-                tau_ij, _ = kendalltau(interaction, y)
-                score = abs(tau_ij) - max(abs(taus[i]), abs(taus[j]))
-                scores.append((score, i, j))
-
-        # Select top-k interactions
-        scores.sort(key=lambda x: x[0], reverse=True)
-        self.selected_pairs_ = scores[:self.top_k]
-        return self
-
-    def transform(self, X):  # noqa: D102
-        X = np.asarray(X)
-        n_samples = X.shape[0]
-        interactions = np.empty((n_samples, len(self.selected_pairs_)))
-        for idx, (_, i, j) in enumerate(self.selected_pairs_):
-            interactions[:, idx] = X[:, i] * X[:, j]
-        return interactions
-
-    def _get_support_mask(self):  # noqa: D105
-        # Flatten the pairs into a set of involved original features
-        selected_features = set()
-        for _, i, j in self.selected_pairs_:
-            selected_features.add(i)
-            selected_features.add(j)
-
-        mask = np.zeros((self.n_features_in_,), dtype=bool)
-        for idx in selected_features:
-            mask[idx] = True
-        return mask
-
-    def get_support_pairs(self):
-        """
-        Return list of selected (i, j) pairs.
-        """
-        return [(i, j) for _, i, j in self.selected_pairs_]
-
-    def get_feature_names_out(self, input_features=None):
-        """
-        Return names of generated interaction features.
-        """
-        return [f"int_{i}_{j}" for (_, i, j) in self.selected_pairs_]
-
 
 class PolyInteractions(TransformerMixin, BaseEstimator):
 
@@ -1654,6 +1594,8 @@ def load_workflow(
     feature_selector_name: str | None = "selectkbest",
     top_k_best=10,
     seq_n_features_to_select=3,
+    corr_method="spearman", # pearson, spearman, kendall
+    corr_threshold: float = 0.8,
     windows_size_in_days=[1, 7, 30],
     cat_encoding_method: str | None = "binary",
     cat_similarity_encode:list=None,
@@ -1702,10 +1644,14 @@ def load_workflow(
     )
     
     workflow_steps = [('feature_engineer', feature_engineer)]
+
+    # drop constant features and cols_to_drop
     workflow_steps.append(('dropper',DropFeatures(cols_to_drop)))
+    workflow_steps.append(('drop_constant',DropConstantFeatures(tol=1.0,missing_values='ignore')))
 
     # similarity based encoding 
     if cat_similarity_encode is not None:
+        assert len(set(cat_similarity_encode) & set(interaction_cat_cols)) == 0, "cat_similarity_encode columns must not be in interaction_cat_cols"
         assert len(set(cat_similarity_encode) & set(cols_to_drop)) == 0, "cat_similarity_encode cols must not be in cols_to_drop"
         assert isinstance(cat_similarity_encode,Sequence), "It should be a list of columns to encode"
         similarity_encoder = load_cat_encoding(cat_encoding_method='similarity',
@@ -1725,8 +1671,7 @@ def load_workflow(
     )
     
     # create interaction features
-    if add_poly_interactions:
-        assert len(set(cat_similarity_encode) & set(interaction_cat_cols)) == 0, "cat_similarity_encode columns must not be in interaction_cat_cols"
+    if add_poly_interactions :
         interactor = PolyInteractions(
             cat_cols=interaction_cat_cols,
             cat_encoder=load_cat_encoding(cat_encoding_method=poly_cat_encoder_name,
@@ -1735,7 +1680,7 @@ def load_workflow(
                                           return_df=True,
                                           drop_invariant=True),
             degree=poly_degree,
-        )
+        )            
         
         encoder_interactor = FeatureUnion(
                         transformer_list=[('poly_interact',interactor),
@@ -1748,32 +1693,41 @@ def load_workflow(
     else:
         workflow_steps.append(('encoder',encoder))
     
-    # get advanced features -> PCA, feature selection + outliers scores
-    advanced_features = []
-    if (str(feature_selector_name) != 'None') or do_pca:
-        dim_reduce = DimensionReduction(
-            verbose=bool(verbose),
-            estimator=feature_select_estimator,
-            do_pca=do_pca,
-            top_k_best=top_k_best,
-            k_score_func=k_score_func,
-            rfe_step=rfe_step,
-            n_jobs=n_jobs,
-            n_splits=n_splits,
-            n_features_to_select=seq_n_features_to_select,
-            cv_gap=cv_gap,
-            scoring=scoring,
-            pca_n_components=pca_n_components,
-            feature_selector_name=str(feature_selector_name),
-        )
-        numeric_cols = make_column_selector(dtype_include=['number'])
-        dim_reduce = ColumnTransformer(transformers=[('dim_reduce',dim_reduce,numeric_cols)],
-                                       remainder='passthrough',
-                                       force_int_remainder_cols=False,
-                                       verbose_feature_names_out=False
-                                       )
-        advanced_features.append(("dim_reduce", dim_reduce))
+    # add pca
+    if do_pca:
+        pca = PCA(n_components=pca_n_components, random_state=42)
+        workflow_steps.append(("dim_reduce", pca))
+    
+    if str(feature_selector_name) != 'None':
         
+        select_features = load_feature_selector(
+                                        n_features_to_select=10,
+                                        cv = TimeSeriesSplit(n_splits=n_splits, gap=cv_gap),
+                                        estimator=feature_select_estimator,
+                                        seq_n_features_to_select=seq_n_features_to_select,
+                                        name = str(feature_selector_name),
+                                        rfe_step = rfe_step,
+                                        top_k_best = top_k_best,
+                                        scoring = scoring,
+                                        corr_method = corr_method, # pearson, spearman, kendall
+                                        corr_threshold=corr_threshold,
+                                        k_score_func=k_score_func,
+                                        group_lasso_alpha=1e-2,
+                                        n_jobs = n_jobs,
+                                        verbose = verbose>0,
+                                    )
+
+        # numeric_cols = make_column_selector(dtype_include=['number'])
+        # select_features = ColumnTransformer(transformers=[('select_features',select_features,numeric_cols)],
+        #                                remainder='passthrough', # for categorical variables
+        #                                force_int_remainder_cols=False,
+        #                                verbose_feature_names_out=False
+        #                             )
+        workflow_steps.append(('to_df_0',ToDataframe()))
+        workflow_steps.append(("feature_selector", select_features))
+
+    # concat outlier detection and/or nystroem
+    advanced_features = []
     if detector_list is not None:
         pyod_det = OutlierDetector(detector_list=detector_list)
         advanced_features.append(("outlier_scores", pyod_det))
@@ -1781,7 +1735,7 @@ def load_workflow(
     if use_nystrom:
         nystrom = Nystroem(
             kernel=nystroem_kernel,
-            degree=3,
+            degree=2,
             n_components=nystroem_components,
         )
         advanced_features.append(('nystrom',nystrom))
@@ -1791,13 +1745,14 @@ def load_workflow(
             transformer_list=advanced_features, n_jobs=n_jobs
         )
           
-    # Final Pipeline
+    
     if isinstance(advanced_features, TransformerMixin):
         workflow_steps.append(('to_df_1',ToDataframe()))
         workflow_steps.append(('advanced_features',advanced_features))
     
-    workflow_steps.append(('drop_constant',DropConstantFeatures(tol=0.95,missing_values='ignore')))
     
+    
+    # Final Pipeline
     if classifier is not None:
         to_df = ToDataframe()
         workflow_steps = workflow_steps + [('to_df_2', to_df), ('model', classifier)]
