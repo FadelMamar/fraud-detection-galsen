@@ -97,6 +97,7 @@ class Arguments:
     n_clusters: int = 0 
     cluster_on_feature:int="AccountId"
 
+    add_fraud_rate_features: bool = False
 
     optuna_n_trials: int = 50
 
