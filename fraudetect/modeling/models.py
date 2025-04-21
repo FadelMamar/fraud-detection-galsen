@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
+import torchcde
 import torch.nn.functional as F
 from skorch import NeuralNetClassifier
 from torchtune.modules import RotaryPositionalEmbeddings
-from skorch import NeuralNetClassifier
 import numpy as np
 import pandas as pd
+from unet.unet import UNet
 from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.mixture import GaussianMixture
-from sklearn.cluster import KMeans
 from sklearn.linear_model import ElasticNet
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -203,7 +203,6 @@ class FraudTransformerWithRoPE(nn.Module):
         return self.classifier(x)
 
 
-
 class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
     """
     Hybrid model: GMM clustering → ElasticNet feature selection → Flexible classifier per cluster.
@@ -300,7 +299,108 @@ class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
     def predict(self, X):
         return np.argmax(self.predict_proba(X), axis=1)
 
-# Skorch wrapper
+class UNet1DFraudClassifier(nn.Module):
+    def __init__(self, in_channels, out_classes=2):
+        super().__init__()
+        self.unet = UNet(
+            in_channels=in_channels,
+            out_classes=out_classes,
+            dimensions=1,
+            num_encoding_blocks=4,
+            out_channels_first_layer=32,
+            normalization='batch',
+            pooling_type='max',
+            upsampling_type='conv',
+            padding=1,
+            activation='ReLU'
+        )
+        self.softmax = nn.LogSoftmax(dim=1)
+
+    def forward(self, x):
+        x = self.unet(x)
+        return self.softmax(x)
+
+class CDEFunc(nn.Module):
+    def __init__(self, hidden_channels, input_channels):
+        super().__init__()
+        # maps hidden state → matrix of shape (hidden, input)
+        self.linear = nn.Linear(hidden_channels, hidden_channels * input_channels)
+
+    def forward(self, t, z):
+        # z: (batch, hidden)
+        batch_size = z.size(0)
+        fz = self.linear(z)
+        # reshape to (batch, hidden, input)
+        return fz.view(batch_size, -1, self.input_channels)
+
+class NeuralCDE(nn.Module):
+    def __init__(self, input_channels, hidden_channels, output_classes):
+        super().__init__()
+        self.input_channels = input_channels
+        self.hidden_channels = hidden_channels
+
+        # initial linear layer to map first observation to z0
+        self.initial = nn.Linear(input_channels, hidden_channels)
+        # learn the CDE vector field
+        self.func = CDEFunc(hidden_channels, input_channels)
+        # final classifier
+        self.readout = nn.Linear(hidden_channels, output_classes)
+
+    def forward(self, X, times):
+        # X: (batch, seq_len, input_channels)
+        # times: (batch, seq_len) monotonic time stamps
+
+        # 1) Build interpolation of X(t)
+        coeffs = torchcde.hermite_cubic_coefficients_with_backward_differences(
+            torch.cat([times.unsqueeze(-1), X], dim=2)
+        )
+        Xcde = torchcde.CubicSpline(coeffs)
+
+        # 2) Initialize hidden state
+        X0 = Xcde.evaluate(times[:, 0])  # (batch, input_channels)
+        z0 = torch.tanh(self.initial(X0))  # (batch, hidden_channels)
+
+        # 3) Solve CDE
+        z_T = torchcde.cdeint(
+            Xcde,
+            z0,
+            times[0],      # t0
+            times[:, -1],  # tN
+            func=self.func,
+            method='rk4'
+        )[-1]  # final hidden state
+
+        # 4) Classify
+        return self.readout(z_T)
+
+
+# --------------  Skorch wrappers
+# def make_skorch_unet(in_channels):
+#     return NeuralNetClassifier(
+#         UNet1DFraudClassifier,
+#         module__in_channels=in_channels,
+#         criterion=nn.NLLLoss,
+#         optimizer=torch.optim.Adam,
+#         lr=1e-3,
+#         max_epochs=20,
+#         batch_size=64,
+#         iterator_train__shuffle=True,
+#         device='cuda' if torch.cuda.is_available() else 'cpu',
+#     )
+
+# net = NeuralNetClassifier(
+#     NeuralCDE,
+#     module__input_channels=FEATURE_DIM,
+#     module__hidden_channels=64,
+#     module__output_classes=2,
+#     criterion=nn.CrossEntropyLoss,
+#     optimizer=torch.optim.Adam,
+#     lr=1e-3,
+#     max_epochs=30,
+#     batch_size=32,
+#     device='cuda' if torch.cuda.is_available() else 'cpu',
+# )
+
 # net_rop = NeuralNetClassifier(
 #     module=FraudTransformerWithRoPE,
 #     module__input_dim=30,        # number of transaction features
