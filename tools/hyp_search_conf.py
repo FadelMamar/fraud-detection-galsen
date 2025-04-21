@@ -613,35 +613,38 @@ models["stackingClassifier"] = dict(
 )
 # %% feature selector
 feature_selector = dict()
-# feature_select_estimator=['decisionTree','balancedRandomForest']
-scoring = [
-    "f1",
-]
-# cv=TimeSeriesSplit(n_splits=5,gap=5000)
-# feature_selector["rfecv"] = dict(selector=RFECV,
-#                                  scoring=scoring,
-#                                  # estimator=feature_select_estimator,
-#                                  step=list(range(1,10)),
-#                                  # cv=[cv,]
-#                                  )
+# feature_select_estimator=DecisionTreeClassifier(max_depth=5,
+#                                                 max_features=None,
+#                                                 random_state=41, 
+#                                                 class_weight="balanced")
+# scoring = [
+#     "f1",
+# ]
+# cv=TimeSeriesSplit(n_splits=3,gap=1000)
+# # feature_selector["rfecv"] = dict(selector=RFECV,
+# #                                  scoring=scoring,
+# #                                  estimator=feature_select_estimator,
+# #                                  step=list(range(1,10)),
+# #                                  cv=[cv,]
+# #                                  )
 
 
 # feature_selector["sequential"] = dict(selector=SequentialFeatureSelector,
-#                                       # estimator=feature_select_estimator,
+#                                       estimator=feature_select_estimator,
 #                                       n_features_to_select=list(range(1,10)),
 #                                       scoring=scoring,
 #                                       tol=[1e-4],
-#                                       # cv=[cv,]
+#                                       cv=[cv,]
 # )
-feature_selector["selectkbest"] = dict(
-    selector=SelectKBest,
-    k=np.arange(50,140,step=5).tolist(),
-)
+# feature_selector["selectkbest"] = dict(
+#     selector=SelectKBest,
+#     k=np.arange(50,140,step=5).tolist(),
+# )
 
 feature_selector["smartcorrelated"] = dict(
     selector=SmartCorrelatedSelection,
     method=['spearman',],
-    threshold=np.linspace(0.78,0.85,10).round(4).tolist(),
+    threshold=np.linspace(0.78,0.85,5).round(3).tolist(),
     scoring=['f1',],
     estimator=DecisionTreeClassifier(max_depth=7,random_state=41,class_weight='balanced'),
     cv=TimeSeriesSplit(n_splits=5, gap=1000),

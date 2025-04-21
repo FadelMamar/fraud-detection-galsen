@@ -485,7 +485,6 @@ class Tuner(object):
             cat_encoding_kwargs=self.cat_encoding_kwards,
             imputer_n_neighbors=self.args.imputer_n_neighbors,
             n_clusters=self.args.n_clusters,
-            cluster_on_feature=self.args.cluster_on_feature,
             do_pca=do_pca,
             verbose=self.verbose,
             n_jobs=self.args.n_jobs,
