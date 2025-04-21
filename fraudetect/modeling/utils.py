@@ -367,7 +367,7 @@ class Tuner(object):
         do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
         pca_n_components = None
         if do_pca:
-            pca_n_components = trial.suggest_int("n_components", 5, 50, 5)
+            pca_n_components = trial.suggest_int("n_components", 35, 50, 5)
 
         # select outlier detector for data aug
         disable_pyod = trial.suggest_categorical(
@@ -446,7 +446,7 @@ class Tuner(object):
         session_gap_minutes = self.args.session_gap_minutes
         if self.iterate_session_gap:
             session_gap_minutes = trial.suggest_categorical(
-                "session_gap_minutes", (np.linspace(12,128,7)*60).round().astype(int).tolist()
+                "session_gap_minutes", (np.linspace(12,72,7)*60).round().astype(int).tolist()
             )
         
         # categorical-numerical interactions
