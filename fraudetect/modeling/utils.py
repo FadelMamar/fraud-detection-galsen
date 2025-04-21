@@ -2,6 +2,9 @@ from sklearn.model_selection import (
     GridSearchCV,
     RandomizedSearchCV,
 )
+from pathlib import Path
+from datetime import datetime, date
+
 from copy import deepcopy
 from itertools import combinations
 from sklearn.model_selection._search import BaseSearchCV
@@ -267,14 +270,11 @@ class Tuner(object):
 
         return cfg
 
-    def save_checkpoint(self, model_name: str, score: float, results: BaseSearchCV):
-        if score >= self.best_score:
+    def save_checkpoint(self, model_name: str, score: float, results):
+        if score > self.best_score:
             self.best_score = score
-            vals = [
-                results,
-            ]
-            joblib.dump(vals, self.ckpt_filename)
-            self.best_records[model_name] = results
+            joblib.dump(results, self.ckpt_filename)
+            # self.best_records[model_name] = results
 
     def load_hyp_conf(self, path_conf: str):
         try:
@@ -334,7 +334,8 @@ class Tuner(object):
         model = instantiate_model(
             model, **sample_model_cfg(models_config)
         )
-      
+
+        # Iterate on categorical encoding method
         if self.iterate_cat_method:
             cat_encoding_method = trial.suggest_categorical(
                     "cat_encoding_method", self.args.cat_encoding_methods 
@@ -445,7 +446,7 @@ class Tuner(object):
         session_gap_minutes = self.args.session_gap_minutes
         if self.iterate_session_gap:
             session_gap_minutes = trial.suggest_categorical(
-                "session_gap_minutes", np.arange(3,24)*60
+                "session_gap_minutes", (np.linspace(12,128,7)*60).round().astype(int).tolist()
             )
         
         # categorical-numerical interactions
@@ -453,7 +454,8 @@ class Tuner(object):
         if do_poly_interact:
             poly_degree = trial.suggest_categorical('poly_degree_interact',[1,self.args.poly_degree])
             if self.args.iterate_poly_cat_encoder_name:
-                poly_cat_encoder_name = trial.suggest_categorical('poly_cat_encoder_name',['woe','catboost','count','binary'])
+                poly_cat_encoder_name = trial.suggest_categorical('poly_cat_encoder_name',
+                                                                  ['woe','catboost','count','binary'])
             else:
                 poly_cat_encoder_name = self.args.poly_cat_encoder_name
             data_interaction_args = dict(
@@ -472,6 +474,7 @@ class Tuner(object):
             cols_to_drop=self.args.cols_to_drop,
             detector_list=detector_list,
             cv_gap=self.args.cv_gap,
+            add_fraud_rate_features=self.args.add_fraud_rate_features,
             reorder_by=self.args.reorder_by,
             n_splits=self.args.n_splits,
             session_gap_minutes=session_gap_minutes,
