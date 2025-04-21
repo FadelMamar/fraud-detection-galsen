@@ -1709,10 +1709,11 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
             df.groupby(self.col_uid_name)
             .agg(agg)
         )
-        
-        cluster_data = cluster_data.convert_dtypes()
-        
-        return cluster_data
+
+        cluster_data.columns = [f"cluster_{col}" if not col.startswith('cluster_') else col 
+                          for col in cluster_data.columns]
+                
+        return cluster_data.convert_dtypes()
                
     def _compute_clusters_customers(self, df) -> None:
         
