@@ -7,7 +7,7 @@ from numbers import Integral
 from functools import partial
 from sklearn.base import TransformerMixin, BaseEstimator, _fit_context
 from sklearn.utils.validation import validate_data
-from sklearn.cluster import MiniBatchKMeans
+from sklearn.cluster import MiniBatchKMeans, Birch
 from category_encoders import (
     BinaryEncoder,
     CountEncoder,
@@ -17,6 +17,7 @@ from category_encoders import (
     TargetEncoder,
     WOEEncoder
 )
+from astropy.timeseries import LombScargle
 from copy import deepcopy
 from typing import Optional, Union, List
 from feature_engine.encoding import StringSimilarityEncoder
@@ -25,6 +26,7 @@ from sklearn.utils.validation import check_is_fitted
 from feature_engine.dataframe_checks import _check_optional_contains_na
 # import spacy
 from group_lasso import GroupLasso
+from itertools import product
 from sklearn.utils._param_validation import Interval
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.impute import KNNImputer
@@ -824,13 +826,11 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self,
         windows_size_in_days: list[int] = [1, 7, 30],
         uid_cols: list[str] = [
-            None,
+            "AccountId","CUSTOMER_ID"
         ],
         session_gap_minutes: int = 30,
-        n_clusters: int = 0,
         uid_col_name: str = "CustomerUID",
         add_fraud_rate_features: bool = True,
-        cluster_on_feature: str = "CUSTOMER_ID",
         use_spline=False,
         spline_degree=3,
         spline_n_knots=6,
@@ -838,7 +838,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         add_seasonal_features=False,
         add_fft=False,
         behavioral_drift_cols: list[str] = [
-            "AccountId",
+            "AccountId","CustomerUID"
         ],
         reorder_by=['TX_DATETIME'],
     ):
@@ -848,8 +848,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self.behavioral_drift_cols = behavioral_drift_cols
         self.add_fraud_rate_features = add_fraud_rate_features
         self.session_gap_minutes = session_gap_minutes
-        self.n_clusters = n_clusters
-        self.cluster_on_feature = cluster_on_feature
 
         self.add_seasonal_features = add_seasonal_features
         self.add_fft = add_fft
@@ -872,7 +870,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
     def fit(self, X: pd.DataFrame, y, **fit_params):
         self.check_dataframe(X=X)
         
-
         # reset index > causes issues when doing cross-val
         df = X.copy().reset_index(drop=True)
         df['TX_FRAUD'] = pd.Series(y)
@@ -907,8 +904,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         self.n_features_in_ = len(self.feature_names_in_)
         self.is_fitted_ = True
 
-        if self.n_clusters > 0:
-            self._compute_clusters_customers(df)
 
         return self
 
@@ -920,6 +915,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         if all([col is not None for col in self.uid_cols]):
             df = self._create_unique_identifier(df)
+            df = self._add_unique_client_stats(df)
 
         df = self._add_temporal_features(df)
         df = self._add_account_stats(df)
@@ -942,9 +938,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         if self.add_fft:
             df = self._add_grouped_fft_features(df=df, freq="D", top_n_freqs=5)
-
-        if self.n_clusters > 0:
-            df = self._add_customer_clusters(df)
 
         df = self._cleanup(df)
         
@@ -985,58 +978,55 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         return X
 
-    def _compute_clusters_customers(self, df) -> None:
-        # -- Compute clusters
-        cluster_data = (
-            df.groupby(self.cluster_on_feature)
-            .agg(
-                {
-                    "TX_AMOUNT": "mean",
-                    "ChannelId": lambda x: x.mode().iloc[0]
-                    if not x.mode().empty
-                    else np.nan,
-                }
-            )
-            .fillna(0)
-        )
-
-        # Encode channel as numeric for clustering
-        cluster_data["ChannelId"] = (
-            cluster_data["ChannelId"].astype("category").cat.codes
-        )
-
-        self._kmeans = MiniBatchKMeans(
-            n_clusters=self.n_clusters, random_state=41, max_iter=500, batch_size=1024
-        )
-        self._kmeans.fit(cluster_data)
-
-        self.customer_cluster_labels = pd.DataFrame(
-            {
-                self.cluster_on_feature: cluster_data.index,
-                "CustomerCluster": self._kmeans.labels_,
-            }
-        )
-
     def _add_temporal_features(self, df):
         df["Hour"] = df["TX_DATETIME"].dt.hour
         df["DayOfWeek"] = df["TX_DATETIME"].dt.dayofweek
         df["IsWeekend"] = df["DayOfWeek"].isin([5, 6]).astype(int)
         df["IsNight"] = df["Hour"].between(0, 6).astype(int)
 
-        for col in ["AccountId", "CUSTOMER_ID"]:
+        id_columns = ["AccountId", "CUSTOMER_ID"]
+        if self.uid_col_name in df.columns:
+            id_columns.append(self.uid_col_name)
+
+        for col in set(id_columns):
             df.sort_values(by=[col, "TX_DATETIME"], inplace=True)
 
-            df[col + "_TimeSinceLastTxn"] = (
+            df[f"{col}_TimeSinceLastTxn"] = (
                 df.groupby(col)["TX_DATETIME"].diff().dt.total_seconds().fillna(0) / 60
             )
 
-            df[col + "_Txn1hCount"] = (
+            df[f"{col}_Txn6hCount"] = (
                 df
                 .set_index("TX_DATETIME")
                 .groupby(col)["TRANSACTION_ID"]
-                .transform(lambda x: x.rolling('1h').count())
+                .transform(lambda x: x.rolling('6h').count())
                 .reset_index(drop=True)
             )
+            
+            df[f"{col}_Txn1dayCount"] = (
+                df
+                .set_index("TX_DATETIME")
+                .groupby(col)["TRANSACTION_ID"]
+                .transform(lambda x: x.rolling('1D').count())
+                .reset_index(drop=True)
+            )
+            
+            df[f"{col}_Txn3dayCount"] = (
+                df
+                .set_index("TX_DATETIME")
+                .groupby(col)["TRANSACTION_ID"]
+                .transform(lambda x: x.rolling('3D').count())
+                .reset_index(drop=True)
+            )
+            
+            df[f"{col}_Txn7dayCount"] = (
+                df
+                .set_index("TX_DATETIME")
+                .groupby(col)["TRANSACTION_ID"]
+                .transform(lambda x: x.rolling('7D').count())
+                .reset_index(drop=True)
+            )
+            
 
             for day in self.windows_size_in_days:
                 df[f"{col}_AvgAmount_{day}day"] = (
@@ -1087,6 +1077,28 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             "CustomerStdAmt"
         ]
         df["CustomerAmountOverAvg"] = df["TX_AMOUNT"] / df["CustomerMeanAmt"]
+
+        return df
+    
+    def _add_unique_client_stats(self, df):
+
+        for value_col in ["TX_AMOUNT","Value"]:
+            customer_stats = (
+                df.groupby(self.uid_col_name)[value_col]
+                .agg(["mean", "std"])
+                .rename(columns={"mean": f"ClientMean{value_col}", "std": f"ClientStd{value_col}"})
+            )
+            customer_stats[f"ClientStd{value_col}"] = (
+                customer_stats[f"ClientStd{value_col}"].fillna(1).replace(0, 1)
+            )
+            customer_stats.fillna({f"ClientMean{value_col}": 0}, inplace=True)
+
+            df = df.merge(customer_stats, on=self.uid_col_name, how="left")
+            df[f"Client{value_col}ZScore"] = (df[value_col] - df[f"ClientMean{value_col}"]) / df[
+                f"ClientStd{value_col}"
+            ]
+            df[f"Client{value_col}OverAvg"] = df[value_col] / df[f"ClientMean{value_col}"]
+
         return df
 
     def _add_categorical_cross_features(self, df):
@@ -1094,10 +1106,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             df["ChannelId"].astype(str) + "_" + df["ProductCategory"].astype(str)
         )
         df['ProductCategory_Account'] = df['ProductCategory'].astype(str) + "_" + df['AccountId'].astype(str)
-        # df['ProductCategory_Customer'] = df['ProductCategory'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
-        # df["Country_Currency"] = (
-        #     df["CountryCode"].astype(str) + "_" + df["CurrencyCode"].astype(str)
-        # )
+        
         df["Channel_PricingStrategy"] = (
             df["ChannelId"].astype(str) + "_" + df["PricingStrategy"].astype(str)
         )
@@ -1114,15 +1123,13 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         )
         df["Hour_Channel"] = df["Hour"].astype(str) + "_" + df["ChannelId"].astype(str)
         df['Hour_Account'] = df['Hour'].astype(str) + "_" + df['AccountId'].astype(str)
-        # df['Hour_Customer'] = df['Hour'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
         df['DayOfWeek_Account'] = df['DayOfWeek'].astype(str) + "_" + df['AccountId'].astype(str)
-        # df['DayOfWeek_Customer'] = df['DayOfWeek'].astype(str) + "_" + df['CUSTOMER_ID'].astype(str)
-        # df["Country_Hour"] = (
-        #     df["CountryCode"].astype(str) + "_" + df["Hour"].astype(str)
-        # )
+
         return df
 
     def _add_frequency_features(self, df):
+
+        # daily number of transactions per account
         df["TxnDate"] = df["TX_DATETIME"].dt.date
         txn_freq = (
             df.groupby(["AccountId", "TxnDate"])["TRANSACTION_ID"]
@@ -1130,6 +1137,16 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             .rename("DailyAccountTxnCount")
         )
         df = df.merge(txn_freq, on=["AccountId", "TxnDate"])
+
+        ## daily number of transactions for each unique client
+        if self.uid_col_name in df.columns:
+            txn_freq = (
+                df.groupby([self.uid_col_name, "TxnDate"])["TRANSACTION_ID"]
+                .count()
+                .rename("DailyClientTxnCount")
+            )
+            df = df.merge(txn_freq, on=[self.uid_col_name, "TxnDate"])
+
         return df
 
     def _add_fraud_rate_features(self, df):
@@ -1145,23 +1162,34 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
     def _compute_behavioral_drift(self, df):
         df = df.sort_values(by=["TX_DATETIME"]).set_index("TX_DATETIME")
+        
+        _behavioral_drift_cols = list(self.behavioral_drift_cols) 
+        if self.uid_col_name in df.columns:
+            _behavioral_drift_cols.append(self.uid_col_name)
+        
+        _behavioral_drift_cols = set(_behavioral_drift_cols)
+        
+        for value_col in ['Value','TX_AMOUNT']:
+            for col in _behavioral_drift_cols:
+                mean_7d = df.groupby(col)[value_col].transform(
+                    lambda x: x.rolling("7d").mean()
+                )
+                std_7d = df.groupby(col)[value_col].transform(
+                    lambda x: x.rolling("7d").std()
+                ).replace(0, 1).fillna(1)
+                
+                mean_30d = df.groupby(col)[value_col].transform(
+                    lambda x: x.rolling("30d").mean()
+                )
+                std_30d = df.groupby(col)[value_col].transform(lambda x: x.rolling("30d").std()
+                                                               ).replace(0, 1).fillna(1)
 
-        for col in self.behavioral_drift_cols:
-            val_7d = df.groupby(col)["TX_AMOUNT"].transform(
-                lambda x: x.rolling("7d").mean()
-            )
-            val_30d = df.groupby(col)["TX_AMOUNT"].transform(
-                lambda x: x.rolling("30d").mean()
-            )
-            df[col + "_RatioTo7dAvg"] = df["TX_AMOUNT"] / val_7d
-            df[col + "_RatioTo30dAvg"] = df["TX_AMOUNT"] / val_30d
-            df[col + "_ZScore_7d"] = (df["TX_AMOUNT"] - val_7d) / df.groupby(col)[
-                "TX_AMOUNT"
-            ].transform(lambda x: x.rolling("7d").std()).replace(0, 1).fillna(1)
-            df[col + "_ZScore_30d"] = (df["TX_AMOUNT"] - val_30d) / df.groupby(col)[
-                "TX_AMOUNT"
-            ].transform(lambda x: x.rolling("30d").std()).replace(0, 1).fillna(1)
+                df[col + f"_{value_col}_RatioTo7dAvg"] = df[value_col] / mean_7d
+                df[col +  f"_{value_col}_RatioTo30dAvg"] = df[value_col] / mean_30d
+                df[col +  f"_{value_col}_ZScore_7d"] = (df[value_col] - mean_7d) / std_7d
+                df[col + f"_{value_col}_ZScore_30d"] = (df[value_col] - mean_30d) / std_30d
 
+        
         df.reset_index(inplace=True)
 
         return df
@@ -1173,8 +1201,6 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             df[f"{col}_MovingAvg5"] = (
                 df.groupby(col)["TX_AMOUNT"]
                 .transform(lambda x: x.rolling(window=5, min_periods=1).mean())
-                # .rolling(window=5, min_periods=1)
-                # .mean()
                 .reset_index(drop=True)
             )
             long_term_avg = (
@@ -1193,7 +1219,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df = df.sort_values(by=["BatchId", "TX_DATETIME"])
         batch_time = df.groupby("BatchId")["TX_DATETIME"].min().sort_values()
         batch_time_gap = (
-            batch_time.diff().dt.total_seconds().rename("TimeBetweenBatches").fillna(0)
+            batch_time.diff().dt.total_seconds().rename("TimeBetweenBatches").fillna(0) / 60
         )
         txn_per_batch = (
             df.groupby("BatchId")["TRANSACTION_ID"].count().rename("TxnPerBatch")
@@ -1203,44 +1229,58 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         return df
 
     def _compute_session_features(self, df):
-        df = df.sort_values(by=["AccountId", "TX_DATETIME"])
-        df["TimeDiff"] = (
-            df.groupby("AccountId")["TX_DATETIME"].diff().dt.total_seconds().div(60)
+        id_col = self.uid_col_name if (self.uid_col_name in df.columns) else "AccountId"
+        df = df.sort_values(by=[id_col, "TX_DATETIME"])
+        timeDiff = (
+            df.groupby(id_col)["TX_DATETIME"].diff().dt.total_seconds().fillna(0) /60
         )
-        df["NewSession"] = (df["TimeDiff"] > self.session_gap_minutes).fillna(True)
-        df["SessionId"] = df.groupby("AccountId")["NewSession"].cumsum()
+        df["NewSession"] = (timeDiff > self.session_gap_minutes).fillna(True)
+        df["SessionId"] = df.groupby(id_col)["NewSession"].cumsum()
         session_stats = (
-            df.groupby(["AccountId", "SessionId"])
+            df.groupby([id_col, "SessionId"])
             .agg(
                 SessionTxnCount=("TRANSACTION_ID", "count"),
-                SessionValue=("TX_AMOUNT", "sum"),
+                SessionAmt=("TX_AMOUNT", "sum"),
+                SessionAmtMean=("TX_AMOUNT", "mean"),
+                SessionAmtStd=("TX_AMOUNT", "std"),
+                SessionValue=("Value", "sum"),
+                SessionValueMean=("Value","mean"),
+                SessionValueStd=("Value","std"),
                 SessionDuration=(
                     "TX_DATETIME",
                     lambda x: (x.max() - x.min()).total_seconds() / 60,
                 ),
                 SessionChannel=(
                     "ChannelId",
-                    lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan,
+                    lambda x: x.mode().sort_values().iloc[0] if not x.mode().empty else np.nan,
+                ),
+                SessionMainProductCategory=(
+                    "ProductCategory",
+                    lambda x: x.mode().sort_values().iloc[0] if not x.mode().empty else np.nan,
+                ),
+                SessionMainProductId=(
+                    "ProductId",
+                    lambda x: x.mode().sort_values().iloc[0] if not x.mode().empty else np.nan,
+                ),
+                SessionMainProvider=(
+                    "ProviderId",
+                    lambda x: x.mode().sort_values().iloc[0] if not x.mode().empty else np.nan,
+                ),
+                SessionMainPricingStrat=(
+                    "PricingStrategy",
+                    lambda x: x.mode().sort_values().iloc[0] if not x.mode().empty else np.nan,
                 ),
             )
-            .fillna(0)
             .reset_index()
         )
-        df = df.merge(session_stats, on=["AccountId", "SessionId"], how="left")
-        return df
 
-    def _add_customer_clusters(self, df):
-        df = df.merge(
-            self._customer_cluster_labels, on=self.cluster_on_feature, how="left"
-        )
-        df["ClusterChannelInteraction"] = (
-            df["CustomerCluster"].astype(str) + "_" + df["ChannelId"].astype(str)
-        )
-        df["ClusterChannelInteraction"] = (
-            df["ClusterChannelInteraction"].astype("category").cat.codes
-        )
-        return df
+        for col in session_stats.columns:
+            session_stats[col] = session_stats[col].fillna(session_stats[col].mode())
 
+        df = df.merge(session_stats, on=[id_col, "SessionId"], how="left")
+
+        return df
+    
     def _add_cyclical_features_transform(self, df):
         X = df
 
@@ -1266,12 +1306,12 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
     def _add_grouped_seasonal_decomposition(self, df, freq="D", period=7):
         features = []
 
-        group_key = "AccountId"
+        group_key = self.uid_col_name if self.uid_col_name in df.columns else "AccountId"
         value_col = "TX_AMOUNT"
         time_col = "TX_DATETIME"
 
         for group_val, group_df in df.groupby(group_key):
-            ts = group_df.set_index(time_col)[value_col].resample(freq).sum().fillna(0)
+            ts = group_df.set_index(time_col)[value_col].resample(freq).sum().interpolate(method='nearest') #.fillna(0)
 
             if len(ts) < period * 2:
                 continue
@@ -1315,29 +1355,29 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
     def _add_grouped_fft_features(self, df, freq="D", top_n_freqs=5):
         features = []
-        group_key = "AccountId"
-        value_col = "TX_AMOUNT"
-        time_col = "TX_DATETIME"
+        group_key = self.uid_col_name if self.uid_col_name in df.columns else "AccountId"
 
-        for group_val, group_df in df.groupby(group_key):
-            ts = group_df.set_index(time_col)[value_col].resample(freq).sum().fillna(0)
+        for value_col in ["TX_AMOUNT","Value"]:
 
-            if len(ts) < top_n_freqs * 2:
-                continue
+            for group_val, group_df in df.groupby(group_key):
+                ts = group_df.set_index("TX_DATETIME")[value_col].resample(freq).sum().interpolate(method='nearest') #.fillna(0)
 
-            fft_vals = np.abs(fft(ts.values))
-            fft_vals = fft_vals[1 : top_n_freqs + 1]  # Exclude DC component
+                if len(ts) < top_n_freqs * 2:
+                    continue
 
-            fft_dict = {group_key: group_val}
-            for i, val in enumerate(fft_vals, start=1):
-                fft_dict[f"fft_freq_{i}"] = val
+                fft_vals = np.abs(fft(ts.values))
+                fft_vals = fft_vals[1 : top_n_freqs + 1]  # Exclude DC component
 
-            features.append(fft_dict)
+                fft_dict = {group_key: group_val}
+                for i, val in enumerate(fft_vals, start=1):
+                    fft_dict[f"fft_freq_{i}"] = val
 
-        fft_df = pd.DataFrame(features)
-        df = df.merge(fft_df, on=group_key, how="left")
-        nan_mask = df[list(fft_df.columns)].isna()
-        df[nan_mask] = 0
+                features.append(fft_dict)
+
+            fft_df = pd.DataFrame(features)
+            df = df.merge(fft_df, on=group_key, how="left")
+            nan_mask = df[list(fft_df.columns)].isna()
+            df[nan_mask] = 0
 
         return df
 
@@ -1359,6 +1399,268 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         return df
 
+
+class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
+    _parameter_constraints = {}
+
+    def __init__(self, 
+                 min_period=24, # 1 day
+                 max_period = 24 * 7, # 1 week
+                 col_uid_name:str='CustomerUID',
+                 uid_cols: list[str] = [
+                     "AccountId","CUSTOMER_ID"
+                 ],
+                 n_clusters:int=0,
+                 add_cum_features:bool=True,
+                 add_lombscargle_features:bool=False,
+                 add_amount_value_ratio:bool=True,
+                #  lombscarge_value_cols=['TX_AMOUNT','Value'],
+                 n_freqs=10):
+        # Choose range: daily to weekly periodicity (assuming t is in hours)
+
+        self.min_period=min_period
+        self.max_period = max_period
+        # self.lombscarge_value_cols = lombscarge_value_cols
+        self.col_uid_name = col_uid_name
+        self.uid_cols = uid_cols
+        self.n_freqs=n_freqs
+        self.add_lombscargle_features=add_lombscargle_features
+        self.add_cum_features=add_cum_features
+        self.add_amount_value_ratio=add_amount_value_ratio
+        self.n_clusters = n_clusters
+
+    def check_dataframe(self, X: pd.DataFrame):
+        assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
+        assert X.isna().sum().sum() < 1, "Found NaN values"
+        assert "TX_FRAUD" not in X.columns, "Please drop TX_FRAUD column"
+    
+    def fit_transform(self, X, y=None, **fit_params):
+        self.fit(X, y, **fit_params)
+        return self.transform(X=X, y=y)
+    
+    @_fit_context(prefer_skip_nested_validation=True)
+    def fit(self, X, y=None, **fit_params):
+
+        df = X.reset_index(drop=True)
+        self.check_dataframe(df)
+        
+        # create_unique_identifier
+        if self.col_uid_name not in df.columns:
+            df[self.col_uid_name] = df[list(self.uid_cols)].apply(
+                    lambda x: "+".join(x), axis=1, raw=False, result_type="reduce"
+                )
+
+        if self.n_clusters > 0:
+            self._cat_encoder = load_cat_encoding(cat_encoding_method='binary',
+                                                  return_df=True,
+                                                  drop_invariant=False)
+            self._compute_clusters_customers(df)
+        
+        self.n_features_in_ = df.shape[1]
+        self.feature_names_in_ = df.columns.tolist()
+                
+        self.is_fitted_ = True        
+
+        return self
+    
+    def transform(self, X, y=None):
+        
+        self.check_dataframe(X)
+
+        df = X.reset_index(drop=True)
+        df.sort_values(by=["TX_DATETIME"], inplace=True)
+
+        # -- is debit
+        df['is_debit'] = (df['TX_AMOUNT'] < 0)*1
+
+        # -- add TX_AMOUNT/Value ratio
+        if self.add_amount_value_ratio:
+            df['TX_AMOUNT_Value_ratio'] = df['TX_AMOUNT'] / df['Value']
+        
+        if self.add_cum_features:
+            df = self._add_cumulative_features(df)
+        
+        df = self._add_deltas(df)
+        df = self._add_categorical_temporal_features(df)
+
+        if self.n_clusters > 0:
+            df = self._add_customer_clusters(df)
+
+        # add lombScargle features
+        if self.add_lombscargle_features:
+            for value_col in ['TX_AMOUNT','Value']:
+                df = self._add_lombscargle_features(df, value_col=value_col)
+        
+        self.get_feature_names_out = df.columns.tolist()
+        
+        self.check_dataframe(X)
+
+        return df
+    
+    # -------- advanced features
+    def _add_categorical_temporal_features(self, df):
+
+        comb = product(['IsNight','IsWeekend'],['ChannelId','ProductCategory',
+                                                     'ProviderId','PricingStrategy',
+                                                     'ProductId'])
+
+        for col1,col2 in comb:
+            df[f"{col1}_{col2}"] = df[col1].astype(str) + '_' + df[col2].astype(str)
+            df[f"{col1}_{col2}"] = df[f"{col1}_{col2}"].astype('category')
+        
+        return df
+            
+    def _add_cumulative_features(self, df:pd.DataFrame):        
+
+        id_cols = ["AccountId", "CUSTOMER_ID"]
+        if self.col_uid_name in df.columns:
+            id_cols.append(self.col_uid_name)
+        
+        id_cols = set(id_cols)
+        
+        for col in ['TX_AMOUNT','Value']:
+            for group_key in id_cols:
+                df[f"{group_key}_TimeSinceLastTxn_Cumsum"] = df.groupby(group_key)[f"{group_key}_TimeSinceLastTxn"].cumsum()  / 60
+                df[f"{col}_Cumsum_{group_key}"] = df.groupby(group_key)[col].cumsum()
+        
+        return df
+    
+    def _add_lombscargle_features(self,df:pd.DataFrame,value_col:str='TX_AMOUNT'):
+
+        features = []
+        freqs = np.linspace(1 / self.max_period, 1 / self.min_period, self.n_freqs)
+
+        for _, group in df.groupby(self.col_uid_name):
+            t = group['TX_DATETIME'].diff().dt.total_seconds().fillna(0) / (60 * 60)  # convert to hours
+            y = group[value_col].values
+
+            if len(t) < 3:  # not enough data
+                features.append(np.zeros(len(freqs)))
+                continue
+
+            # Normalize time to start at 0
+            t = t - t.min()
+            ls = LombScargle(t, y)
+            power = ls.power(freqs)
+
+            features.append(power)
+        
+        features = np.array(features)
+        feature_names = [f"{value_col}_LombScargle_{i}" for i in range(len(freqs))]
+        features_df = pd.DataFrame(features, columns=feature_names)
+
+        return pd.concat([df, features_df], axis=1)
+
+    def _add_deltas(self, df:pd.DataFrame):
+
+        id_cols = ["AccountId", self.col_uid_name]
+
+        for group_key in set(id_cols):
+            for col in ['TX_AMOUNT','Value']:
+                df[col + "_diff_to_last_transaction"] = (
+                        df.groupby(group_key)[col].diff().fillna(0)
+                    )
+        
+        return df
+
+    def _add_customer_clusters(self, df):
+        
+        # transform categorical values
+        cluster_data = self._get_cluster_data(df)
+        cluster_data = self._cat_encoder.transform(cluster_data)
+        cluster_data.reset_index()
+        
+        # get clusster label
+        labels_ = self._birch.predict(cluster_data)
+        
+        cluster_data['CustomerCluster'] = labels_
+        
+        df = df.merge(cluster_data, on=self.col_uid_name, how="left")
+
+        # comb = product(['CustomerCluster',],['ChannelId',
+        #                                      'ProductCategory',
+        #                                      'ProviderId',
+        #                                      'PricingStrategy',
+        #                                     'ProductId'])
+        # for col1,col2 in comb:
+        #     df[f"{col1}_{col2}"] = df[col1].astype(str) + '_' + df[col2].astype(str)
+        #     df[f"{col1}_{col2}"] = df[f"{col1}_{col2}"].astype("category")
+
+        return df
+     
+    def _get_cluster_data(self,df):
+        
+        # customer profile identificators
+        agg = {"TX_AMOUNT": "mean",
+                "Value": "mean",
+                f"{self.col_uid_name}_TimeSinceLastTxn":'mean',
+                'DailyClientTxnCount': 'mean',
+                "Hour":lambda x: x.mode().sort_values().iloc[0],
+                "DayOfWeek": lambda x: x.mode().sort_values().iloc[0],
+                "IsWeekend": 'mean',
+                f"{self.col_uid_name}_Txn6hCount":'mean',
+                f"{self.col_uid_name}_Txn1dayCount":'mean',
+                f"{self.col_uid_name}_Txn3dayCount":'mean',
+                f"{self.col_uid_name}_Txn7dayCount":'mean',
+                "IsNight":'mean',
+                f"{self.col_uid_name}_MovingAvg5": "mean",
+                "ChannelId": lambda x: x.mode().sort_values().iloc[0]
+                if not x.mode().empty
+                else np.nan,
+                "ProductId": lambda x: x.mode().sort_values().iloc[0]
+                if not x.mode().empty
+                else np.nan,
+                "ProductCategory": lambda x: x.mode().sort_values().iloc[0]
+                if not x.mode().empty
+                else np.nan,
+                "ProviderId": lambda x: x.mode().sort_values().iloc[0]
+                if not x.mode().empty
+                else np.nan,
+                "PricingStrategy": lambda x: x.mode().sort_values().iloc[0]
+                if not x.mode().empty
+                else np.nan,
+            }
+        
+        for value_col in ['TX_AMOUNT','Value']:
+            agg[self.col_uid_name + f"_{value_col}_RatioTo7dAvg"] = 'mean'
+            agg[self.col_uid_name +  f"_{value_col}_RatioTo30dAvg"] = 'mean'
+            agg[self.col_uid_name +  f"_{value_col}_ZScore_7d"] = 'mean'
+            agg[self.col_uid_name + f"_{value_col}_ZScore_30d"] = 'mean'
+
+        # -- compute aggregations
+        cluster_data = (
+            df.groupby(self.col_uid_name)
+            .agg(agg)
+        )
+               
+        cluster_data = cluster_data.convert_dtypes()
+        
+        return cluster_data
+        
+        
+    def _compute_clusters_customers(self, df) -> None:
+        
+        df = df.sort_values(['TX_DATETIME'])
+        
+        # encode categorical data
+        cluster_data = self._get_cluster_data(df)
+        cluster_data = self._cat_encoder.fit_transform(X=cluster_data,y=None)
+        
+        for col in ["ChannelId","ProductId","ProductCategory","ProviderId","PricingStrategy"]:
+            value_counts = df.groupby(self.col_uid_name)[col].apply(
+                    lambda x: x.value_counts()
+                    ).reset_index().rename(columns={'level_1':f'{col}_perClient',col:f'{col}_counts'})
+            cluster_data = cluster_data.merge(value_counts,on=self.col_uid_name,how='left')
+        
+        # compute clusters
+        self._birch = Birch(n_clusters=self.n_clusters,
+                            threshold=0.5,
+                            branching_factor=50)
+        self._birch.fit(cluster_data)
+
+        return None
+
+    
 # TODO: debug
 class GroupLassoFeatureSelector(SelectorMixin, BaseEstimator):
     """
@@ -1430,7 +1732,7 @@ class GroupLassoFeatureSelector(SelectorMixin, BaseEstimator):
 
         # Selected feature indices in encoded space
         coef = np.ravel(self.model.coef_)
-        self.selected_idx_ = np.where(coef != 0)[0]
+        self.selected_idx_ = np.where(~np.isclose(coef,0,atol=1e-3))[0]
         return self
 
     def _get_support_mask(self):  # noqa: D105
@@ -1568,8 +1870,7 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
 
         return  poly_out
 
-
-    
+   
 
 def load_workflow(
         classifier=None,
@@ -1585,7 +1886,7 @@ def load_workflow(
         None,
     ],
     uid_col_name="CustomerUID",
-    add_fraud_rate_features: bool = True,
+    add_fraud_rate_features: bool = False,
     reorder_by=['TX_DATETIME',],
     behavioral_drift_cols=[
         "AccountId",
@@ -1601,16 +1902,16 @@ def load_workflow(
     cat_similarity_encode:list=None,
     nlp_model_name='en_core_web_md',
     cat_encoding_kwargs={},
-    cluster_on_feature="AccountId",
     add_poly_interactions=False,
     interaction_cat_cols=None,
+    add_cum_features=True,
     poly_degree=2,
-    poly_cat_encoder_name="catboost",
+    poly_cat_encoder_name="binary",
     imputer_n_neighbors=9,
     add_fft=False,
     add_seasonal_features=False,
     use_nystrom=False,
-    use_sincos=False,
+    use_sincos=True,
     use_spline=False,
     spline_degree=3,
     spline_n_knots=6,
@@ -1620,7 +1921,7 @@ def load_workflow(
     rfe_step=3,
     n_clusters=0,
     k_score_func=mutual_info_classif,
-    do_pca=True,
+    do_pca=False,
     verbose=False,
     n_jobs=2,
 ):
@@ -1631,7 +1932,6 @@ def load_workflow(
         reorder_by=list(reorder_by) if isinstance(reorder_by,Sequence) else reorder_by,
         add_fraud_rate_features=add_fraud_rate_features,
         session_gap_minutes=session_gap_minutes,
-        n_clusters=n_clusters,
         add_fft=add_fft,
         add_seasonal_features=add_seasonal_features,
         use_sincos=use_sincos,
@@ -1639,11 +1939,23 @@ def load_workflow(
         spline_degree=spline_degree,
         spline_n_knots=spline_n_knots,
         behavioral_drift_cols=behavioral_drift_cols,
-        cluster_on_feature=cluster_on_feature,
         uid_col_name=uid_col_name,  # name given to uid cols created from interactions of uid_cols
     )
-    
+
     workflow_steps = [('feature_engineer', feature_engineer)]
+
+    # advanced feature engineer
+    if add_cum_features or n_clusters>0 :
+        feature_engineer_2 = AdvancedFeatureEngineer(min_period=6, # 6 hours
+                                                    max_period = 24, # 1 day
+                                                    col_uid_name='AccountId',
+                                                    add_cum_features=add_cum_features,
+                                                    n_clusters=n_clusters,
+                                                    add_lombscargle_features=False,
+                                                    add_amount_value_ratio=True,
+                                                    n_freqs=5
+                                                )   
+        workflow_steps.append(('feature_engineer_2', feature_engineer_2))
 
     # drop constant features and cols_to_drop
     workflow_steps.append(('dropper',DropFeatures(cols_to_drop)))
@@ -1692,19 +2004,21 @@ def load_workflow(
 
     else:
         workflow_steps.append(('encoder',encoder))
+
+    
+    # --------------------- DImension Reduction ---------------------
     
     # add pca
     if do_pca:
         pca = PCA(n_components=pca_n_components, random_state=42)
         workflow_steps.append(("dim_reduce", pca))
     
+    # select features
     if str(feature_selector_name) != 'None':
-        
         select_features = load_feature_selector(
-                                        n_features_to_select=10,
+                                        n_features_to_select=seq_n_features_to_select,
                                         cv = TimeSeriesSplit(n_splits=n_splits, gap=cv_gap),
                                         estimator=feature_select_estimator,
-                                        seq_n_features_to_select=seq_n_features_to_select,
                                         name = str(feature_selector_name),
                                         rfe_step = rfe_step,
                                         top_k_best = top_k_best,
@@ -1717,49 +2031,37 @@ def load_workflow(
                                         verbose = verbose>0,
                                     )
 
-        # numeric_cols = make_column_selector(dtype_include=['number'])
-        # select_features = ColumnTransformer(transformers=[('select_features',select_features,numeric_cols)],
-        #                                remainder='passthrough', # for categorical variables
-        #                                force_int_remainder_cols=False,
-        #                                verbose_feature_names_out=False
-        #                             )
         workflow_steps.append(('to_df_0',ToDataframe()))
         workflow_steps.append(("feature_selector", select_features))
-
-    # concat outlier detection and/or nystroem
-    advanced_features = []
-    if detector_list is not None:
-        pyod_det = OutlierDetector(detector_list=detector_list)
-        advanced_features.append(("outlier_scores", pyod_det))
     
+    # reduce dimension using Nystrom
     if use_nystrom:
         nystrom = Nystroem(
             kernel=nystroem_kernel,
             degree=2,
             n_components=nystroem_components,
         )
-        advanced_features.append(('nystrom',nystrom))
-
-    if len(advanced_features)>0:
-        advanced_features = FeatureUnion(
-            transformer_list=advanced_features, n_jobs=n_jobs
+        workflow_steps.append(('nystrom',nystrom))
+    
+    # ------------------------------ Add outlier scores
+    
+    if detector_list is not None:
+        pyod_det = OutlierDetector(detector_list=detector_list)
+        outlier_scores = [("outlier_scores", pyod_det)]
+        
+        outlier_scores = FeatureUnion(
+            transformer_list=outlier_scores, 
         )
-          
     
-    if isinstance(advanced_features, TransformerMixin):
         workflow_steps.append(('to_df_1',ToDataframe()))
-        workflow_steps.append(('advanced_features',advanced_features))
+        workflow_steps.append(('outlier_scores',outlier_scores))    
     
-    
-    
-    # Final Pipeline
+    # ------------------------ Add classifer
     if classifier is not None:
         to_df = ToDataframe()
         workflow_steps = workflow_steps + [('to_df_2', to_df), ('model', classifier)]
     
-    workflow = Pipeline(steps=workflow_steps)
-
-    return workflow
+    return Pipeline(steps=workflow_steps)
 
 
 # AdvancedFeatures = DimensionReduction
