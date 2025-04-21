@@ -8,6 +8,7 @@ from functools import partial
 from sklearn.base import TransformerMixin, BaseEstimator, _fit_context
 from sklearn.utils.validation import validate_data
 from sklearn.cluster import MiniBatchKMeans, Birch
+from sklearn.metrics import silhouette_score
 from category_encoders import (
     BinaryEncoder,
     CountEncoder,
@@ -21,7 +22,13 @@ from astropy.timeseries import LombScargle
 from copy import deepcopy
 from typing import Optional, Union, List
 from feature_engine.encoding import StringSimilarityEncoder
-from feature_engine.selection import DropFeatures,DropConstantFeatures,SmartCorrelatedSelection
+from feature_engine.selection import (DropFeatures,DropConstantFeatures,
+                                      SmartCorrelatedSelection,
+                                      DropDuplicateFeatures,
+                                      RecursiveFeatureAddition,
+                                      RecursiveFeatureElimination,
+                                      DropHighPSIFeatures
+                                      )
 from sklearn.utils.validation import check_is_fitted
 from feature_engine.dataframe_checks import _check_optional_contains_na
 # import spacy
@@ -189,13 +196,14 @@ def load_feature_selector(
     n_features_to_select=10,
     cv: TimeSeriesSplit = TimeSeriesSplit(n_splits=5, gap=5000),
     estimator=DecisionTreeClassifier(
-        max_depth=15, max_features=None, random_state=41, class_weight="balanced"
+        max_depth=5, max_features=None, random_state=41, class_weight="balanced"
     ),
     name: str = "selectkbest",
     rfe_step: int = 3,
     top_k_best: int = 10,
+    rf_threshold:float=0.05,
     scoring: str = "f1",
-    corr_method: str = "pearson", # pearson, spearman, kendall
+    corr_method: str = "spearman", # pearson, spearman, kendall
     corr_threshold:float=0.8,
     k_score_func=mutual_info_classif,
     group_lasso_alpha:float=1e-2,
@@ -225,6 +233,13 @@ def load_feature_selector(
             scoring=scoring,
             cv=cv,
         )
+        
+    elif name == 'rfacv':
+       selector = RecursiveFeatureAddition(estimator=estimator,
+                                           scoring=scoring,
+                                           cv=cv,
+                                           threshold=rf_threshold
+                                           )
 
     elif name == "selectkbest":
         selector = SelectKBest(score_func=k_score_func, k=top_k_best)
@@ -240,6 +255,10 @@ def load_feature_selector(
                                             cv=cv,
                                             scoring=scoring
                                         )
+    elif name == 'psi':
+        selector = ... # DropHighPSIFeatures()
+        raise NotImplementedError
+        
 
     else:
         raise NotImplementedError
@@ -1485,7 +1504,10 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
 
         if self.n_clusters > 0:
             df = self._add_customer_clusters(df)
-
+        #-- TODO: debug behavior first
+        # df = self._compute_client_value_counts(df, self.col_uid_name, ["ChannelId","ProductCategory",
+        #                                                                "ProviderId","PricingStrategy"]
+        #                                        )
         # add lombScargle features
         if self.add_lombscargle_features:
             for value_col in ['TX_AMOUNT','Value']:
@@ -1577,16 +1599,71 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         
         df = df.merge(cluster_data, on=self.col_uid_name, how="left")
 
-        # comb = product(['CustomerCluster',],['ChannelId',
-        #                                      'ProductCategory',
-        #                                      'ProviderId',
-        #                                      'PricingStrategy',
-        #                                     'ProductId'])
-        # for col1,col2 in comb:
-        #     df[f"{col1}_{col2}"] = df[col1].astype(str) + '_' + df[col2].astype(str)
-        #     df[f"{col1}_{col2}"] = df[f"{col1}_{col2}"].astype("category")
-
         return df
+    
+    def _compute_client_value_counts(self,
+        df: pd.DataFrame,
+        group_column: str,
+        columns_to_analyze: list[str]
+    ) -> pd.DataFrame:
+        """Compute value counts for multiple columns per client group in one operation.
+        
+        Uses a single groupby+melt operation instead of iterative groupbys for efficiency.
+
+        Args:
+            df: Input DataFrame containing client data.
+            group_column: Column name to group by (e.g., client ID).
+            columns_to_analyze: List of columns to compute value counts for.
+
+        Returns:
+            DataFrame with tidy format containing:
+            - Group column
+            - Original column name
+            - Observed value
+            - Count of occurrences
+
+        Example:
+            >>> df = pd.DataFrame({
+            ...     'ClientId': [1,1,2,2],
+            ...     'ChannelId': ['A','A','B','B'],
+            ...     'productcategory': ['X','Y','X','Y']
+            ... })
+            >>> compute_client_value_counts(df, 'ClientId', ['ChannelId', 'productcategory'])
+            ClientId          column       value  counts
+            0         1       ChannelId          A       2
+            1         1  productcategory         X       1
+            2         1  productcategory         Y       1
+            3         2       ChannelId          B       2
+            4         2  productcategory         X       1
+            5         2  productcategory         Y       1
+        """
+        # Reshape data to long format for batch processing
+        melted_df = df.melt(
+            id_vars=[group_column],
+            value_vars=columns_to_analyze,
+            var_name="column",
+            value_name="value"
+        )
+        
+        # Single groupby operation for all columns
+        melted_df = (melted_df
+                        .groupby([group_column, "column", "value"])
+                        .size()
+                        .reset_index(name="counts")
+                        )
+        
+        # merge results in original df
+        wide_format = melted_df.pivot(
+            index=self.col_uid_name,
+            columns=['column', 'value'],
+            values='counts'
+        ).fillna(0)
+        
+        wide_format.columns = [f"{col}_perClient_{val}" for col, val in wide_format.columns]
+        df_merged = df.merge(wide_format, on=self.col_uid_name, how='left')
+        
+        
+        return df_merged
      
     def _get_cluster_data(self,df):
         
@@ -1632,12 +1709,11 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
             df.groupby(self.col_uid_name)
             .agg(agg)
         )
-               
+        
         cluster_data = cluster_data.convert_dtypes()
         
         return cluster_data
-        
-        
+               
     def _compute_clusters_customers(self, df) -> None:
         
         df = df.sort_values(['TX_DATETIME'])
@@ -1645,12 +1721,6 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         # encode categorical data
         cluster_data = self._get_cluster_data(df)
         cluster_data = self._cat_encoder.fit_transform(X=cluster_data,y=None)
-        
-        for col in ["ChannelId","ProductId","ProductCategory","ProviderId","PricingStrategy"]:
-            value_counts = df.groupby(self.col_uid_name)[col].apply(
-                    lambda x: x.value_counts()
-                    ).reset_index().rename(columns={'level_1':f'{col}_perClient',col:f'{col}_counts'})
-            cluster_data = cluster_data.merge(value_counts,on=self.col_uid_name,how='left')
         
         # compute clusters
         self._birch = Birch(n_clusters=self.n_clusters,
@@ -1947,8 +2017,9 @@ def load_workflow(
     # advanced feature engineer
     if add_cum_features or n_clusters>0 :
         feature_engineer_2 = AdvancedFeatureEngineer(min_period=6, # 6 hours
-                                                    max_period = 24, # 1 day
-                                                    col_uid_name='AccountId',
+                                                    max_period = 24*3, # 1 day
+                                                    col_uid_name=uid_col_name,
+                                                    uid_cols=uid_cols,
                                                     add_cum_features=add_cum_features,
                                                     n_clusters=n_clusters,
                                                     add_lombscargle_features=False,
@@ -1960,6 +2031,7 @@ def load_workflow(
     # drop constant features and cols_to_drop
     workflow_steps.append(('dropper',DropFeatures(cols_to_drop)))
     workflow_steps.append(('drop_constant',DropConstantFeatures(tol=1.0,missing_values='ignore')))
+    workflow_steps.append(('drop_dupplicates',DropDuplicateFeatures()))
 
     # similarity based encoding 
     if cat_similarity_encode is not None:
