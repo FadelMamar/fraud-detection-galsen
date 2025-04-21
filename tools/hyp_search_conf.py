@@ -7,7 +7,11 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.feature_selection import (
     RFECV,
     SequentialFeatureSelector,
-    SelectKBest, f_classif, mutual_info_classif)
+    SelectKBest, 
+    f_classif, 
+    mutual_info_classif,
+    r_regression
+)
 
 # from sklearn.model_selection import TimeSeriesSplit
 from sklearn.ensemble import (
@@ -23,6 +27,8 @@ from sklearn.gaussian_process import GaussianProcessClassifier
 from catboost import CatBoostClassifier
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
+
+from feature_engine.selection import SmartCorrelatedSelection
 
 from imblearn.under_sampling import NearMiss, EditedNearestNeighbours
 from imblearn.over_sampling import SMOTE, ADASYN, BorderlineSMOTE, SVMSMOTE
@@ -245,7 +251,7 @@ samplers["smoteENN"] = dict(
     sampling_strategy=fracs,
     random_state=[41],
     enn=EditedNearestNeighbours(
-        sampling_strategy="majority", n_neighbors=5, kind_sel="all", n_jobs=6
+        sampling_strategy="majority", n_neighbors=5, kind_sel="all",
     ),
     sampler=SMOTEENN,
 )
@@ -272,17 +278,17 @@ combinedsamplers = [
 # %% models
 models = dict()
 
-learning_rate = np.logspace(-2,-1,10).tolist()
-C = np.logspace(-1,5,50).tolist()
-n_estimators = np.arange(3, 40,).tolist()
-max_depth = np.arange(3, 15).tolist()
+learning_rate = (np.logspace(-3,-2,10)*5.0).tolist()
+C = np.logspace(1,4,50).tolist()
+n_estimators = np.arange(7, 17,step=2).tolist()
+max_depth = np.arange(4, 6).tolist()
 
 # own models
 models["clusterElastic"] = dict(
     en_l1_ratio=np.linspace(0.1, 0.9, 10).round(3).tolist(),
     random_state=[41],
-    n_clusters=np.arange(3,11).tolist(),
-    base_estimator=DecisionTreeClassifier(max_depth=15,
+    n_clusters=np.arange(2,8).tolist(),
+    base_estimator=DecisionTreeClassifier(max_depth=7,
                                         class_weight='balanced',
                                         max_features=None),
     model=ClusterElasticClassifier,
@@ -400,7 +406,7 @@ models["decisionTree"] = dict(
     class_weight=[
         "balanced",
     ],
-    max_features=["sqrt", "log2", None],
+    max_features=[None],
     random_state=[None],
     model=DecisionTreeClassifier,
 )
@@ -411,10 +417,10 @@ models["randomForest"] = dict(
     max_depth=max_depth,
     min_samples_split=[2,],
     min_samples_leaf=[1,],
-    class_weight=["balanced", "balanced_subsample"],
+    class_weight=["balanced",],
     max_features=[
         "sqrt",
-        "log2",
+        None,
     ],
     random_state=[
         None,
@@ -429,28 +435,24 @@ models["balancedRandomForest"] = dict(
     min_samples_split=[2, 3, 4],
     min_samples_leaf=[1, 2],
     class_weight=["balanced", "balanced_subsample"],
-    max_features=["sqrt", "log2", "auto"],
+    max_features=["sqrt", None],
     random_state=[
         None,
     ],
-    sampling_strategy=(np.arange(2, 5) * 4e-3).tolist(),
+    # sampling_strategy=(np.arange(2, 5) * 4e-3).tolist(),
     model=BalancedRandomForestClassifier,
 )
 
 models["gradientBoosting"] = dict(
-    loss=["log_loss", "exponential"],
+    loss=["log_loss",],
     n_estimators=n_estimators,
     learning_rate=learning_rate,
-    subsample=[0.75, 0.85, 1.0],
+    subsample=np.linspace(0.9,1,10).round(3).tolist(),
     criterion=["friedman_mse", "squared_error"],
-    max_depth=[
-        5,
-        10,
-        15,
-    ],
-    min_samples_split=[2, 3, 4],
-    min_samples_leaf=[1, 2],
-    max_features=["sqrt", "log2"],
+    max_depth=max_depth,
+    min_samples_split=[2,],
+    min_samples_leaf=[2,3],
+    max_features=[None,],
     random_state=[None],
     tol=1e-4,
     model=GradientBoostingClassifier,
@@ -497,21 +499,19 @@ models["xgboost"] = dict(
     n_estimators=n_estimators,
     max_depth=max_depth,
     learning_rate=learning_rate,
-    booster=["gbtree", "dart", "gblinear"],
-    objective=["binary:hinge", "binary:logistic"],
+    booster=["gbtree",],
+    objective=["binary:logistic"],
     tree_method=['hist','approx'],
-    scale_pos_weight=np.logspace(-1, 5, num=50).tolist(),
-    subsample=np.linspace(0.5,1,num=10).round(3).tolist(),
+    scale_pos_weight=np.logspace(1, 3, num=10).tolist(),
+    # subsample=np.linspace(0.5,1,num=10).round(3).tolist(),
     max_bin=[
         255,
     ],
-    colsample_bytree=np.linspace(0.5,1,num=10).round(3).tolist(),
+    # colsample_bytree=np.linspace(0.3,1,num=10).round(3).tolist(),
     gamma=[
         0.0,
     ],
-    reg_lambda=[
-        1.0,
-    ],
+    # reg_lambda=np.logspace(1, 3, num=50).tolist(),
     reg_alpha=[
         0.0,
     ],
@@ -528,17 +528,20 @@ models["xgboost"] = dict(
         True,
     ],
     max_cat_to_onehot=[
-        9,
+        6,
     ],
-    n_jobs=[None,],
     device=['cpu',],
     model=XGBClassifier,
 )
 
-models["catboost"] = dict(iterations=[None, 50, 100, 150],
-                          loss_function=['Logloss'],
+models["catboost"] = dict(loss_function=['Logloss'],
                           eval_metric=['PRAUC'],
+                          model_size_reg=C,
+                          max_depth=max_depth,
+                        #   rsm=np.linspace(0.3,1.,20).tolist(),
                           learning_rate=learning_rate,
+                          scale_pos_weight=np.logspace(1, 3, num=10).tolist(),
+                          n_estimators=n_estimators,
                           model=CatBoostClassifier
                           )
 
@@ -549,11 +552,10 @@ models["lgbm"] = dict(
     ],
     class_weight=["balanced",],
     force_col_wise=[True,],
-    min_data_in_leaf=np.linspace(50,1000,100).round().astype(int).tolist(),
+    # min_data_in_leaf=np.linspace(50,1000,100).round().astype(int).tolist(),
     max_depth=max_depth,
-    num_leaves=np.linspace(10,50,30).round().astype(int).tolist(),
+    # num_leaves=np.linspace(10,50,30).round().astype(int).tolist(),
     verbosity=[-1],
-    n_jobs=[6],
     model=LGBMClassifier,
 )
 
@@ -631,9 +633,21 @@ scoring = [
 #                                       tol=[1e-4],
 #                                       # cv=[cv,]
 # )
-
 feature_selector["selectkbest"] = dict(
     selector=SelectKBest,
-    k=np.linspace(25,80,num=30).round().astype(int).tolist(),
+    k=np.arange(50,140,step=5).tolist(),
 )
-selectkbest_score_func=dict(f_classif=f_classif,mutual_info_classif=mutual_info_classif)
+
+feature_selector["smartcorrelated"] = dict(
+    selector=SmartCorrelatedSelection,
+    method=['spearman',],
+    threshold=np.linspace(0.78,0.85,10).round(4).tolist(),
+    scoring=['f1',],
+    estimator=DecisionTreeClassifier(max_depth=7,random_state=41,class_weight='balanced'),
+    cv=TimeSeriesSplit(n_splits=5, gap=1000),
+)
+                                        
+selectkbest_score_func=dict(f_classif=f_classif,
+                            mutual_info_classif=mutual_info_classif,
+                            r_regression=r_regression
+                            )
