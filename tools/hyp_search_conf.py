@@ -3,6 +3,7 @@ from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import LinearSVC, SVC
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import f1_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.feature_selection import (
     RFECV,
@@ -16,6 +17,7 @@ from sklearn.feature_selection import (
 # from sklearn.model_selection import TimeSeriesSplit
 from sklearn.ensemble import (
     RandomForestClassifier,
+    ExtraTreesClassifier,
     GradientBoostingClassifier,
     HistGradientBoostingClassifier,
     BaggingClassifier,
@@ -278,11 +280,11 @@ combinedsamplers = [
 # %% models
 models = dict()
 
-learning_rate = (np.logspace(-3,-2,10)*5.0).tolist()
+learning_rate = np.linspace(0.01,0.05,10).round(4).tolist()
 C = np.logspace(1,4,50).tolist()
-n_estimators = np.arange(7, 17,step=2).tolist()
-max_depth = np.arange(4, 6).tolist()
-
+n_estimators = np.arange(13, 16,step=2).tolist()
+max_depth = np.arange(4, 7).tolist()
+criterion=["entropy", "gini"]
 # own models
 models["clusterElastic"] = dict(
     en_l1_ratio=np.linspace(0.1, 0.9, 10).round(3).tolist(),
@@ -398,7 +400,7 @@ models["mlp"] = dict(
 )
 
 models["decisionTree"] = dict(
-    criterion=["entropy", "gini"],
+    criterion=criterion,
     splitter=["best"],
     max_depth=max_depth,
     min_samples_split=[2,],
@@ -411,9 +413,25 @@ models["decisionTree"] = dict(
     model=DecisionTreeClassifier,
 )
 
+models["extraTrees"] = dict(
+    criterion=criterion,
+    n_estimators=n_estimators,
+    max_depth=max_depth,
+    min_samples_split=[2,],
+    min_samples_leaf=[1,],
+    class_weight=[
+        "balanced",
+    ],
+    max_features=[None,'sqrt'],
+    random_state=[None],
+    oob_score=f1_score,
+    bootstrap=[True,False],
+    model=ExtraTreesClassifier,
+)
+
 models["randomForest"] = dict(
     n_estimators=n_estimators,
-    criterion=["entropy", "gini"],
+    criterion=criterion,
     max_depth=max_depth,
     min_samples_split=[2,],
     min_samples_leaf=[1,],
@@ -430,11 +448,11 @@ models["randomForest"] = dict(
 
 models["balancedRandomForest"] = dict(
     n_estimators=n_estimators,
-    criterion=["entropy", "gini"],
+    criterion=criterion,
     max_depth=max_depth,
-    min_samples_split=[2, 3, 4],
-    min_samples_leaf=[1, 2],
-    class_weight=["balanced", "balanced_subsample"],
+    min_samples_split=[2,],
+    min_samples_leaf=[1,],
+    class_weight=["balanced",],
     max_features=["sqrt", None],
     random_state=[
         None,
@@ -447,11 +465,11 @@ models["gradientBoosting"] = dict(
     loss=["log_loss",],
     n_estimators=n_estimators,
     learning_rate=learning_rate,
-    subsample=np.linspace(0.9,1,10).round(3).tolist(),
-    criterion=["friedman_mse", "squared_error"],
+    subsample=np.linspace(0.9,0.95,10).round(3).tolist(),
+    criterion=["squared_error",],
     max_depth=max_depth,
     min_samples_split=[2,],
-    min_samples_leaf=[2,3],
+    min_samples_leaf=[3,4],
     max_features=[None,],
     random_state=[None],
     tol=1e-4,
@@ -585,13 +603,9 @@ models["votingClassifier"] = dict(
 )
 
 models["adaBoostClassifier"] = dict(
-    estimator=[
-        RandomForestClassifier(),
-        DecisionTreeClassifier(),
-        LogisticRegression(),
-    ],
+    estimator=DecisionTreeClassifier(max_depth=5,class_weight='balanced'),
     n_estimators=n_estimators,
-    learning_rate=np.logspace(-4, -1, 10).tolist(),
+    learning_rate=learning_rate,
     model=AdaBoostClassifier,
 )
 
@@ -599,7 +613,7 @@ models["stackingClassifier"] = dict(
     estimators=[
         [HistGradientBoostingClassifier(), CatBoostClassifier(), LGBMClassifier()],
     ],
-    final_estimator=[LogisticRegression(), SVC()],
+    final_estimator=[LogisticRegression(solver='liblinear',C=1e3,class_weight='balanced'),],
     cv=[
         TimeSeriesSplit(n_splits=5, gap=5000),
     ],
@@ -644,10 +658,10 @@ feature_selector = dict()
 feature_selector["smartcorrelated"] = dict(
     selector=SmartCorrelatedSelection,
     method=['spearman',],
-    threshold=np.linspace(0.78,0.85,5).round(3).tolist(),
+    threshold=np.linspace(0.8,0.9,10).round(3).tolist(),
     scoring=['f1',],
     estimator=DecisionTreeClassifier(max_depth=7,random_state=41,class_weight='balanced'),
-    cv=TimeSeriesSplit(n_splits=5, gap=1000),
+    cv=TimeSeriesSplit(n_splits=3, gap=5000),
 )
                                         
 selectkbest_score_func=dict(f_classif=f_classif,
