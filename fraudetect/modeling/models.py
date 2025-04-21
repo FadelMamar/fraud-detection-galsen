@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from unet.unet import UNet
 from sklearn.base import BaseEstimator, ClassifierMixin, clone
-from sklearn.mixture import GaussianMixture
+from sklearn.cluster import Birch
 from sklearn.linear_model import ElasticNet
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -210,7 +210,7 @@ class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
     Parameters:
     -----------
     n_clusters : int
-        Number of GMM clusters.
+        Number of  clusters.
     base_estimator : sklearn estimator
         The classifier to be trained per cluster (e.g., LogisticRegression, RandomForestClassifier).
     en_alpha : float
@@ -235,12 +235,7 @@ class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
         self.random_state = random_state
 
     def fit(self, X, y):
-        self.gmm_ = GaussianMixture(
-            n_components=self.n_clusters,
-            covariance_type='full',
-            init_params='k-means++',
-            random_state=self.random_state
-        ).fit(X)
+        self.gmm_ = Birch(self.n_clusters).fit(X)
 
         X = np.array(X)
 
