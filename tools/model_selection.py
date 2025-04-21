@@ -16,7 +16,7 @@ import mlflow
 from datetime import datetime, date
 from optuna.samplers import TPESampler
 from fraudetect.config import (
-    COLUMNS_TO_DROP,
+    # COLUMNS_TO_DROP,
     Arguments,
 )
 from optuna.integration.mlflow import MLflowCallback
@@ -33,51 +33,105 @@ if __name__ == "__main__":
 
     args.model_names = (
         # "mlp",
-        "decisionTree",
+        # "decisionTree",
         # "clusterElastic",
         # "logisticReg",
         # "svc",
         # "randomForest",
         # "balancedRandomForest",
-        # "gradientBoosting",
+        "gradientBoosting",
         # "histGradientBoosting",
         # "catboost",
         # 'lgbm',
-        # "xgboost",
+        "xgboost",
     )
 
     current_time = datetime.now().strftime("%H-%M")
 
-    mlflow_exp_name = "cat-models" 
-    args.study_name = "cat-models"
+    mlflow_exp_name = "ensemble-trees" 
+    args.study_name = mlflow_exp_name
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
-    args.optuna_n_trials = 30
+    args.optuna_n_trials = 300
 
-    args.cv_n_iter = 200
-    args.scoring = ["f1", "average_precision", "precision", "recall"]  # ["f1", "average_precision", "precision", "recall"]
+    # args.cv_n_iter = 200 # not used
+    args.scoring = ["f1", "average_precision"]  # ["f1", "average_precision", "precision", "recall"]
     args.cv_method = "optuna"  # optuna random
     args.cv_gap = 1051 * 5
     args.n_splits = 5  #
-    args.n_jobs = 2 # for hyp tuning
+    args.n_jobs = 10 # for hyp tuning
     args.delta_train = 50
     args.delta_delay = 7
-    args.delta_test = 20
+    args.delta_test = 20 
 
     args.random_state = 41  # for data prep
 
-    args.cols_to_drop = COLUMNS_TO_DROP
+    cols_to_drop = ["CurrencyCode",
+                    "CountryCode",
+                    "SubscriptionId",
+                    "BatchId",
+                    "CUSTOMER_ID",
+                    "AccountId",
+                    "TRANSACTION_ID",
+                    "TX_DATETIME",
+                    "TX_TIME_DAYS",
+                    "Hour_Account",
+                    "DayOfWeek_Account",
+                    "ProductCategory_Account",
+                    "CustomerCluster",
+                    "CustomerUID",
+    ]
 
-    args.session_gap_minutes = 60 * 3
+    args.interaction_cat_cols= [
+                        'ChannelId',
+                        'PricingStrategy',
+                        'ProductId',
+                        'ProductCategory',
+                        'ProviderId'
+                        ]
+    args.add_poly_interactions = True
+    args.poly_degree=1
+    args.iterate_poly_cat_encoder_name=False
+    args.poly_cat_encoder_name="binary" # or woe or catboost or binary -> used if iterate_poly_cat_encoder_name=False
+
+    args.nlp_model_name = 'en_core_web_sm' # en-core-web-sm en_core_web_md
+    args.cat_similarity_encode = None #['ProductCategory',] # None ProductCategory
+
+    args.n_clusters = 0
+
+    # cols to concat and form a UID
+    args.uid_col_name="CustomerUID"
+    args.uid_cols = (
+        "AccountId", "CUSTOMER_ID" # or None
+    )
+    # dropping uid of client if exists
+    if all(args.uid_cols):
+        cols_to_drop.append(args.uid_col_name)
+    
+    args.cols_to_drop = cols_to_drop
+
+    args.add_fraud_rate_features = False
+
+    iterate_session_gap = True
+    args.session_gap_minutes = 60 * 12
+
+    iterate_cat_method = True # if True, then args.cat_encoding_method is not used
+    args.cat_encoding_methods = (
+                                'binary',
+                                # 'catboost',
+                                # 'count',
+                                # 'woe', 
+                                # 'similarity' only suitable for ProductCategory
+                                )
 
     args.do_pca = False  # try pca
     args.do_feature_selection = True
-    args.add_fft=True
-    args.add_seasonal_features=True
-    args.use_nystrom=True
+    args.add_fft=False
+    args.add_seasonal_features=False
+    args.use_nystrom=False
     args.use_sincos=False
     args.use_spline=True
-
+    
     args.reorder_by = ('TX_DATETIME','AccountId')
 
     args.disable_pyod_outliers = True
@@ -94,22 +148,16 @@ if __name__ == "__main__":
 
     args.sampler_names = None
     args.sampler_cfgs = None
-    args.disable_samplers = True
-
-    args.concat_features = (
-        None,  # ("AccountId", "CUSTOMER_ID") # ("AccountId", "CUSTOMER_ID") or None
-    )
-    args.concat_features_encoding_kwargs = dict(
-        cat_encoding_method="hashing", n_components=14
-    )
+    args.disable_samplers = True   
 
     args.add_imputer = False  # handle missing values at prediction time
-
+    args.imputer_n_neighbors=9
+    
     args.cat_encoding_method = "binary"  # to handle unknown values effectively, 'catboost', 'binary', 'hashing', 'None'
-    args.cat_encoding_hash_n_components = 7  # if cat_encoding_method='hashing'
+    args.cat_encoding_hash_n_components = 12  # if cat_encoding_method='hashing'
     args.cat_encoding_base_n = 4  # if cat_encoding_method=base_n
-    args.onehot_threshold = 9
-    args.windows_size_in_days = (1, 7, 30)
+    args.onehot_threshold = 6
+    args.windows_size_in_days = (1, 3, 7, 30)
     cat_encoding_kwards = dict(
         hash_n_components=args.cat_encoding_hash_n_components,
         handle_missing="value",
@@ -118,6 +166,9 @@ if __name__ == "__main__":
         drop_invariant=False,
         handle_unknown="value",
         base=args.cat_encoding_base_n,
+        woe_randomized=True,
+        woe_sigma=0.05,
+        woe_regularization=1.0,
     ) 
 
     # for debugging
@@ -129,10 +180,10 @@ if __name__ == "__main__":
 
     # using optuna
     opt_direction = dict()
-    if isinstance(args.scoring,Sequence):
-        opt_direction['directions'] = ["maximize"]*len(args.scoring)
-    else:
-        opt_direction['direction'] = "maximize"
+    # if isinstance(args.scoring,Sequence):
+    #     opt_direction['directions'] = ["maximize"]*len(args.scoring)
+    # else:
+    opt_direction['direction'] = "maximize"
     study = optuna.create_study(
         sampler=TPESampler(multivariate=True, group=True),
         study_name=args.study_name,
@@ -149,7 +200,9 @@ if __name__ == "__main__":
         args=args, 
         verbose=0, 
         cat_encoding_kwards=cat_encoding_kwards,
-        tune_threshold=True
+        tune_threshold=False,
+        iterate_cat_method=iterate_cat_method,
+        iterate_session_gap=iterate_session_gap,
     )
     objective_optuna.load_hyp_conf(CURDIR / "hyp_search_conf.py")
 
@@ -160,7 +213,8 @@ if __name__ == "__main__":
         exp_id = mlflow.create_experiment(name=mlflow_exp_name)
 
     mlflow.set_experiment(experiment_id=exp_id)
-    mlflc = MLflowCallback(metric_name=args.scoring,
+    mlflow_metric_name = args.scoring if isinstance(args.scoring, str) else "fitness"
+    mlflc = MLflowCallback(metric_name=mlflow_metric_name,
                            create_experiment=False,
                            )
     study.optimize(
@@ -175,4 +229,7 @@ if __name__ == "__main__":
 
     # Save study.best_trial
     filename = os.path.join(args.work_dir, args.study_name + ".joblib")
-    joblib.dump(study.best_trial, filename)
+    if isinstance(args.scoring,str):
+        joblib.dump(study.best_trial, filename)
+    else:
+        joblib.dump(study.best_trials, filename)
