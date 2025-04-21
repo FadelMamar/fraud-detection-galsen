@@ -364,7 +364,8 @@ class Tuner(object):
                     print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} categorical variable encoder.")
         
         # PCA
-        do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
+        # do_pca = trial.suggest_categorical("pca", [False, self.args.do_pca])
+        do_pca = self.args.do_pca
         pca_n_components = None
         if do_pca:
             pca_n_components = trial.suggest_int("n_components", 35, 50, 5)
@@ -393,12 +394,13 @@ class Tuner(object):
                 detector_list.append(detector)
 
         # feature selector:
-        do_feature_selection = trial.suggest_categorical(
-            "select_features", [False, self.args.do_feature_selection]
-        )
+        # do_feature_selection = trial.suggest_categorical(
+        #     "select_features", [False, self.args.do_feature_selection]
+        # )
         selector_cfg = {}
         feature_selector_name = None
         k_score_func = None
+        do_feature_selection = self.args.do_feature_selection
         if do_feature_selection:
             feature_selector_name = trial.suggest_categorical(
                 "feature_selector_name", self.HYP_CONFIGS.feature_selector.keys()
@@ -425,7 +427,7 @@ class Tuner(object):
                                         k, [False, v],
                                     )
         if advanced_transformation['use_nystrom']:
-            advanced_transformation['nystroem_components'] = trial.suggest_int("nystroem_components", 5, 50, 5)
+            advanced_transformation['nystroem_components'] = trial.suggest_int("nystroem_components", 35, 72, 5)
         
         # pca
         advanced_transformation['pca_n_components']= pca_n_components or 20
@@ -446,8 +448,11 @@ class Tuner(object):
         session_gap_minutes = self.args.session_gap_minutes
         if self.iterate_session_gap:
             session_gap_minutes = trial.suggest_categorical(
-                "session_gap_minutes", (np.linspace(12,72,7)*60).round().astype(int).tolist()
+                "session_gap_minutes", self.args.session_gap_minutes
             )
+        else:
+            assert isinstance(self.args.session_gap_minutes, int), "session_gap_minutes should be an integer."
+            session_gap_minutes = self.args.session_gap_minutes
         
         # categorical-numerical interactions
         do_poly_interact = trial.suggest_categorical("do_poly_interact", [False, self.args.add_poly_interactions])
@@ -477,6 +482,9 @@ class Tuner(object):
             add_fraud_rate_features=self.args.add_fraud_rate_features,
             reorder_by=self.args.reorder_by,
             n_splits=self.args.n_splits,
+            add_cum_features = self.args.add_cum_features,
+            behavioral_drift_cols=list(self.args.behavioral_drift_cols),
+            add_imputer=self.args.add_imputer,
             session_gap_minutes=session_gap_minutes,
             uid_cols=self.args.uid_cols,
             feature_selector_name=feature_selector_name,
@@ -530,6 +538,8 @@ class Tuner(object):
                         pre_dispatch=self.args.n_jobs,
                     )
         
+        
+        
         scores = []
         if isinstance(self.args.scoring,Sequence):
             scores = [np.mean(results[f"test_{metric}"]) for metric in self.args.scoring]
@@ -540,6 +550,10 @@ class Tuner(object):
         estimators_cv_splits = results['estimator']
         fitness = np.mean(scores)
         self.save_checkpoint(model_name=model_name, score=fitness, results=estimators_cv_splits)
+
+        trial.report(fitness, self.count_iter)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
 
         return fitness
 

@@ -746,7 +746,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
                 col for col in cols if df[col].nunique() >= self.onehot_threshold
             ]
             cat_encoder = load_cat_encoding(
-                cat_encoding_method=self.cat_encoding_method, **self.cat_encoding_kwargs
+                cat_encoding_method=self.cat_encoding_method,**self.cat_encoding_kwargs
             )
             transformers = transformers + [
                 ("onehot", onehot_encoder, cols_onehot),
@@ -754,7 +754,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
             ]
 
         col_transformer = ColumnTransformer(
-            transformers, remainder="passthrough", n_jobs=self.n_jobs, verbose=False,verbose_feature_names_out=False
+            transformers, remainder="passthrough", n_jobs=self.n_jobs, verbose=False,verbose_feature_names_out=True
         )
 
         return col_transformer
@@ -1371,7 +1371,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df[nan_mask] = 0
 
         return df
-
+    # TODO: Debug
     def _add_grouped_fft_features(self, df, freq="D", top_n_freqs=5):
         features = []
         group_key = self.uid_col_name if self.uid_col_name in df.columns else "AccountId"
@@ -1907,7 +1907,7 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
         _poly = PolynomialFeatures(degree=self.degree, interaction_only=True, include_bias=False)
         self._interactor = ColumnTransformer(transformers=[('poly_interact',_poly, _cat_cols + self._numeric_cols)],
                                                             remainder='passthrough',
-                                                            verbose_feature_names_out=False)
+                                                            verbose_feature_names_out=True)
         
         self._interactor.fit(X_encoded)
         
@@ -1950,14 +1950,14 @@ def load_workflow(
     n_splits=5,
     cv_gap=5000,
     scoring="f1",
-    onehot_threshold=9,
-    session_gap_minutes=60 * 3,
+    onehot_threshold=6,
+    session_gap_minutes=60 * 24,
     uid_cols=[
         None,
     ],
     uid_col_name="CustomerUID",
     add_fraud_rate_features: bool = False,
-    reorder_by=['TX_DATETIME',],
+    reorder_by=['TX_DATETIME','AccountId'],
     behavioral_drift_cols=[
         "AccountId",
     ],

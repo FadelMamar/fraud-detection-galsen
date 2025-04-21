@@ -62,6 +62,8 @@ class Arguments:
         "randomForest",
         "histGradientBoosting",
     )
+    behavioral_drift_cols:Sequence = ("AccountId", 'CustomerUID')
+    add_cum_features:bool = False
     session_gap_minutes: int = 30
     onehot_threshold: int = 9
     pyod_detectors: Sequence = ("iforest", "cblof", "loda", "knn")
