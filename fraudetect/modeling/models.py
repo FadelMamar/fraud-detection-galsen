@@ -1,29 +1,28 @@
 import torch
 import torch.nn as nn
 import torchcde
-import torch.nn.functional as F
-from skorch import NeuralNetClassifier
 from torchtune.modules import RotaryPositionalEmbeddings
 import numpy as np
-import pandas as pd
 from unet.unet import UNet
 from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.cluster import Birch
 from sklearn.linear_model import ElasticNet
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.utils.multiclass import check_classification_targets
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len).unsqueeze(1).float()
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(torch.log(torch.tensor(10000.0)) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float()
+            * -(torch.log(torch.tensor(10000.0)) / d_model)
+        )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe.unsqueeze(0))  # shape (1, max_len, d_model)
+        self.register_buffer("pe", pe.unsqueeze(0))  # shape (1, max_len, d_model)
 
     def forward(self, x):
         # x: (batch_size, seq_len, d_model)
@@ -33,7 +32,9 @@ class PositionalEncoding(nn.Module):
 
 
 class FraudTransformer(nn.Module):
-    def __init__(self, input_dim, d_model=64, n_heads=4, num_layers=2, dropout=0.1, num_classes=2):
+    def __init__(
+        self, input_dim, d_model=64, n_heads=4, num_layers=2, dropout=0.1, num_classes=2
+    ):
         """
         input_dim: number of features per transaction
         d_model: embedding dimension
@@ -47,9 +48,11 @@ class FraudTransformer(nn.Module):
             d_model=d_model,
             nhead=n_heads,
             dropout=dropout,
-            batch_first=True  # input shape: (batch, seq, features)
+            batch_first=True,  # input shape: (batch, seq, features)
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_layers
+        )
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(d_model, num_classes)
 
@@ -58,17 +61,19 @@ class FraudTransformer(nn.Module):
         x: tensor of shape (batch_size, seq_len, input_dim)
         """
         # project input features to d_model
-        x = self.input_proj(x)                      # (batch_size, seq_len, d_model)
-        x = self.pos_encoder(x)                     # add positional encodings
-        x = self.transformer_encoder(x)             # (batch_size, seq_len, d_model)
-        x = x.mean(dim=1)                           # mean pooling over sequence
+        x = self.input_proj(x)  # (batch_size, seq_len, d_model)
+        x = self.pos_encoder(x)  # add positional encodings
+        x = self.transformer_encoder(x)  # (batch_size, seq_len, d_model)
+        x = x.mean(dim=1)  # mean pooling over sequence
         x = self.dropout(x)
-        x = self.classifier(x)                      # (batch_size, num_classes)
+        x = self.classifier(x)  # (batch_size, num_classes)
         return x
 
 
 class FraudGRU(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64, num_layers=2, dropout=0.1, num_classes=2):
+    def __init__(
+        self, input_dim, hidden_dim=64, num_layers=2, dropout=0.1, num_classes=2
+    ):
         """
         GRU-based sequence classifier.
         - input_dim: number of features per transaction
@@ -80,11 +85,12 @@ class FraudGRU(nn.Module):
         super().__init__()
         # Bidirectional GRU
         self.gru = nn.GRU(
-            input_dim, hidden_dim,
+            input_dim,
+            hidden_dim,
             num_layers=num_layers,
             dropout=dropout if num_layers > 1 else 0,
             batch_first=True,
-            bidirectional=True
+            bidirectional=True,
         )
         self.dropout = nn.Dropout(dropout)
         # hidden_dim * 2 for bidirectional output
@@ -103,7 +109,9 @@ class FraudGRU(nn.Module):
 
 
 class FraudLSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64, num_layers=2, dropout=0.1, num_classes=2):
+    def __init__(
+        self, input_dim, hidden_dim=64, num_layers=2, dropout=0.1, num_classes=2
+    ):
         """
         LSTM-based sequence classifier.
         - input_dim: number of features per transaction
@@ -115,11 +123,12 @@ class FraudLSTM(nn.Module):
         super().__init__()
         # Bidirectional LSTM
         self.lstm = nn.LSTM(
-            input_dim, hidden_dim,
+            input_dim,
+            hidden_dim,
             num_layers=num_layers,
             dropout=dropout if num_layers > 1 else 0,
             batch_first=True,
-            bidirectional=True
+            bidirectional=True,
         )
         self.dropout = nn.Dropout(dropout)
         # hidden_dim * 2 for bidirectional output
@@ -147,7 +156,7 @@ class FraudTransformerWithRoPE(nn.Module):
         dropout=0.1,
         num_classes=2,
         max_seq_len=500,
-        rope_base=10000
+        rope_base=10000,
     ):
         super().__init__()
         self.d_model = d_model
@@ -159,17 +168,14 @@ class FraudTransformerWithRoPE(nn.Module):
 
         # Rotary positional embeddings per head
         self.rope = RotaryPositionalEmbeddings(
-            dim=self.head_dim,              # per-head dim
+            dim=self.head_dim,  # per-head dim
             max_seq_len=max_seq_len,
-            base=rope_base
+            base=rope_base,
         )
 
         # Transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dropout=dropout,
-            batch_first=True
+            d_model=d_model, nhead=n_heads, dropout=dropout, batch_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers=num_layers
@@ -206,7 +212,7 @@ class FraudTransformerWithRoPE(nn.Module):
 class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
     """
     Hybrid model: GMM clustering → ElasticNet feature selection → Flexible classifier per cluster.
-    
+
     Parameters:
     -----------
     n_clusters : int
@@ -220,14 +226,15 @@ class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
     random_state : int
         Random seed for reproducibility.
     """
+
     def __init__(
         self,
         n_clusters=5,
-        base_estimator=DecisionTreeClassifier(max_depth=5,
-                                              class_weight='balanced',
-                                              max_features=None),
+        base_estimator=DecisionTreeClassifier(
+            max_depth=5, class_weight="balanced", max_features=None
+        ),
         en_l1_ratio=0.5,
-        random_state=42
+        random_state=42,
     ):
         self.n_clusters = n_clusters
         self.base_estimator = base_estimator
@@ -243,56 +250,54 @@ class ClusterElasticClassifier(ClassifierMixin, BaseEstimator):
         check_classification_targets(y)
 
         self.classes_ = np.unique(y)
-        
+
         clusters = self.gmm_.predict(X)
-        
+
         self.elasticnets_ = {}
         self.cluster_models_ = {}
-        
+
         for c in range(self.n_clusters):
             idx = np.where(clusters == c)[0]
             if len(idx) == 0:
                 continue
-            
+
             Xc, yc = X[idx], y[idx]
-            
+
             en = ElasticNet(
-                alpha=1.0,
-                l1_ratio=self.en_l1_ratio,
-                random_state=self.random_state
+                alpha=1.0, l1_ratio=self.en_l1_ratio, random_state=self.random_state
             )
             en.fit(Xc, yc)
-            selected = np.where(~np.isclose(en.coef_ , 0., atol=1e-3))[0]
+            selected = np.where(~np.isclose(en.coef_, 0.0, atol=1e-3))[0]
             if selected.size == 0:
                 selected = np.arange(X.shape[1])
-            
+
             self.elasticnets_[c] = selected
-            
+
             # Clone and train the base estimator
             model = clone(self.base_estimator)
             model.fit(Xc[:, selected], yc)
             self.cluster_models_[c] = model
-        
+
         return self
 
     def predict_proba(self, X):
-
         X = np.array(X)
 
         clusters = self.gmm_.predict(X)
         proba = np.zeros((X.shape[0], 2))  # Binary classification
-        
+
         for c, model in self.cluster_models_.items():
             sel = np.where(clusters == c)[0]
             if sel.size == 0:
                 continue
             feats = self.elasticnets_[c]
-            proba[sel] = model.predict_proba(X[sel][:,feats])
-        
+            proba[sel] = model.predict_proba(X[sel][:, feats])
+
         return proba
 
     def predict(self, X):
         return np.argmax(self.predict_proba(X), axis=1)
+
 
 class UNet1DFraudClassifier(nn.Module):
     def __init__(self, in_channels, out_classes=2):
@@ -303,17 +308,18 @@ class UNet1DFraudClassifier(nn.Module):
             dimensions=1,
             num_encoding_blocks=4,
             out_channels_first_layer=32,
-            normalization='batch',
-            pooling_type='max',
-            upsampling_type='conv',
+            normalization="batch",
+            pooling_type="max",
+            upsampling_type="conv",
             padding=1,
-            activation='ReLU'
+            activation="ReLU",
         )
         self.softmax = nn.LogSoftmax(dim=1)
 
     def forward(self, x):
         x = self.unet(x)
         return self.softmax(x)
+
 
 class CDEFunc(nn.Module):
     def __init__(self, hidden_channels, input_channels):
@@ -327,6 +333,7 @@ class CDEFunc(nn.Module):
         fz = self.linear(z)
         # reshape to (batch, hidden, input)
         return fz.view(batch_size, -1, self.input_channels)
+
 
 class NeuralCDE(nn.Module):
     def __init__(self, input_channels, hidden_channels, output_classes):
@@ -359,10 +366,10 @@ class NeuralCDE(nn.Module):
         z_T = torchcde.cdeint(
             Xcde,
             z0,
-            times[0],      # t0
+            times[0],  # t0
             times[:, -1],  # tN
             func=self.func,
-            method='rk4'
+            method="rk4",
         )[-1]  # final hidden state
 
         # 4) Classify
@@ -465,5 +472,3 @@ class NeuralCDE(nn.Module):
 #     batch_size=64,
 #     device='cuda' if torch.cuda.is_available() else 'cpu',
 # )
-
-

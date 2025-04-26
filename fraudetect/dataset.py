@@ -45,7 +45,7 @@ def load_data(data_path: str = "../data/training.csv") -> pd.DataFrame:
     df_data["CountryCode"] = df_data["CountryCode"].astype(str)
     df_data["PricingStrategy"] = df_data["PricingStrategy"].astype(str)
     df_data["TX_TIME_DAYS"] = df_data["TX_TIME_DAYS"].astype("UInt8")
-    
+
     cat_cols = df_data.select_dtypes(include=["object", "string"]).columns
     for col in cat_cols:
         df_data[col] = df_data[col].astype("category")

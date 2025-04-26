@@ -2,53 +2,31 @@ from pyod.models.base import BaseDetector
 from typing import Sequence
 import pandas as pd
 import numpy as np
-from tqdm import tqdm
 from numbers import Integral
-from functools import partial
 from sklearn.base import TransformerMixin, BaseEstimator, _fit_context
 from sklearn.utils.validation import validate_data
-from sklearn.cluster import MiniBatchKMeans, Birch
-from sklearn.metrics import silhouette_score
-from category_encoders import (
-    BinaryEncoder,
-    CountEncoder,
-    HashingEncoder,
-    BaseNEncoder,
-    CatBoostEncoder,
-    TargetEncoder,
-    WOEEncoder
-)
+from collections import Counter
+from sklearn.cluster import  Birch
+
 from astropy.timeseries import LombScargle
-from copy import deepcopy
-from typing import Optional, Union, List
+from typing import Optional, Union
 from feature_engine.encoding import StringSimilarityEncoder
 from feature_engine.selection import (DropFeatures,DropConstantFeatures,
-                                      SmartCorrelatedSelection,
                                       DropDuplicateFeatures,
-                                      RecursiveFeatureAddition,
-                                      RecursiveFeatureElimination,
-                                      DropHighPSIFeatures
                                       )
 from sklearn.utils.validation import check_is_fitted
 from feature_engine.dataframe_checks import _check_optional_contains_na
 # import spacy
-from group_lasso import GroupLasso
-from itertools import product
+from itertools import product, combinations
 from sklearn.utils._param_validation import Interval
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, SplineTransformer
+from sklearn.preprocessing import StandardScaler, SplineTransformer
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.feature_selection import (
-    RFECV,
-    VarianceThreshold,
-    SequentialFeatureSelector,
-    SelectKBest,
     mutual_info_classif,
-    SelectorMixin
 )
-from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures
-from scipy.stats import kendalltau
+from sklearn.preprocessing import PolynomialFeatures
 from sklearn.decomposition import PCA
 from sklearn.kernel_approximation import Nystroem
 from sklearn.pipeline import Pipeline, FeatureUnion, make_pipeline
@@ -58,309 +36,10 @@ from scipy.fft import fft
 import pandas as pd
 import numpy as np
 from sklearn.tree import DecisionTreeClassifier
-from ..detectors import get_detector, instantiate_detector
+from .utils import *
 
 # sklearn.set_config(enable_metadata_routing=True)
 
-
-def load_cat_encoding(
-    cat_encoding_method: str,
-    cols=None,
-    hash_n_components=7,
-    handle_missing="value",
-    return_df=True,
-    hash_method="md5",
-    drop_invariant=False,
-    handle_unknown="value",
-    base: int = 4,
-    woe_randomized=True,
-    woe_sigma=0.05,
-    woe_regularization=1.0,
-    nlp_model_name: str = 'en_core_web_md',
-
-):
-    
-    if cat_encoding_method == "binary":
-        return BinaryEncoder(
-            handle_missing=handle_missing,
-            cols=cols,
-            drop_invariant=drop_invariant,
-            handle_unknown=handle_unknown,
-        )
-
-    elif cat_encoding_method == "count":
-        return CountEncoder(
-            handle_missing=handle_missing,
-            cols=cols,
-            drop_invariant=drop_invariant,
-            handle_unknown=handle_unknown,
-        )
-
-    elif cat_encoding_method == "hashing":
-        return HashingEncoder(
-            n_components=hash_n_components,
-            hash_method=hash_method,
-            cols=cols,
-            return_df=return_df,
-            drop_invariant=drop_invariant,
-        )
-
-    elif cat_encoding_method == "base_n":
-        return BaseNEncoder(
-            return_df=return_df,
-            cols=cols,
-            handle_missing=handle_missing,
-            drop_invariant=drop_invariant,
-            handle_unknown=handle_unknown,
-            base=base,
-        )
-    
-    elif cat_encoding_method == "catboost":
-        return CatBoostEncoder(
-            return_df=return_df,
-            cols=cols,
-            handle_missing=handle_missing,
-            drop_invariant=drop_invariant,
-            handle_unknown=handle_unknown,
-        )
-    
-    elif cat_encoding_method == "target_enc":
-        return TargetEncoder(
-            return_df=return_df,
-            cols=cols,
-            handle_missing=handle_missing,
-            drop_invariant=drop_invariant,
-            handle_unknown=handle_unknown,
-        )
-    
-    elif cat_encoding_method == "woe":
-        return WOEEncoder(
-            return_df=return_df,
-            cols=cols,
-            handle_missing=handle_missing,
-            drop_invariant=drop_invariant,
-            handle_unknown=handle_unknown,
-            randomized=woe_randomized,
-            sigma=woe_sigma,
-            regularization=woe_regularization
-        )
-
-    elif cat_encoding_method == "similarity":
-        return SpaCySimilarityEncoder(nlp_model_name=nlp_model_name,
-                                      missing_values='ignore',
-                                      variables=cols,
-                                      )
-    
-    else: 
-        raise NotImplementedError(
-            f"cat_encoding_method {cat_encoding_method} is not implemented."
-        )
-
-
-def load_cols_transformer(
-    df: pd.DataFrame,
-    onehot_threshold=9,
-    n_jobs=1,
-    scaler=StandardScaler(),
-    onehot_encoder=OneHotEncoder(handle_unknown="ignore"),
-    cat_encoding_method="binary",
-    **cat_encoding_kwargs,
-):
-    numeric_cols = df.select_dtypes(include=["number"]).columns
-    transformers = [("scaled", scaler, numeric_cols)]
-
-    # categorical columns
-    if str(cat_encoding_method) == "None":
-        print("Categorical columns will not be encoded by ColumnTransformer.")
-
-    else:
-        cols = df.select_dtypes(include=["object", "string"]).columns
-        cols_onehot = [col for col in cols if df[col].nunique() < onehot_threshold]
-        cols_cat_encode = [col for col in cols if df[col].nunique() >= onehot_threshold]
-        cat_encoder = load_cat_encoding(
-            cat_encoding_method=cat_encoding_method, **cat_encoding_kwargs
-        )
-        transformers = transformers + [
-            ("onehot", onehot_encoder, cols_onehot),
-            ("cat_encode", cat_encoder, cols_cat_encode),
-        ]
-
-    col_transformer = ColumnTransformer(
-        transformers, remainder="passthrough", n_jobs=n_jobs, verbose=False,verbose_feature_names_out=False
-    )
-
-    return col_transformer
-
-
-def load_feature_selector(
-    n_features_to_select=10,
-    cv: TimeSeriesSplit = TimeSeriesSplit(n_splits=5, gap=5000),
-    estimator=DecisionTreeClassifier(
-        max_depth=5, max_features=None, random_state=41, class_weight="balanced"
-    ),
-    name: str = "selectkbest",
-    rfe_step: int = 3,
-    top_k_best: int = 10,
-    rf_threshold:float=0.05,
-    scoring: str = "f1",
-    corr_method: str = "spearman", # pearson, spearman, kendall
-    corr_threshold:float=0.8,
-    k_score_func=mutual_info_classif,
-    group_lasso_alpha:float=1e-2,
-    n_jobs: int = 4,
-    verbose: bool = False,
-) -> SelectorMixin:
-    
-    selector = None
-
-    if name == "rfecv":
-        selector = RFECV(
-            estimator=estimator,
-            step=rfe_step,
-            cv=cv,
-            scoring=scoring,
-            n_jobs=n_jobs,
-            verbose=verbose,
-        )
-    
-    elif name == "sequential":
-        selector = SequentialFeatureSelector(
-            estimator=estimator,
-            n_features_to_select=n_features_to_select,
-            direction="forward",
-            n_jobs=n_jobs,
-            tol=1e-4,
-            scoring=scoring,
-            cv=cv,
-        )
-        
-    elif name == 'rfacv':
-       selector = RecursiveFeatureAddition(estimator=estimator,
-                                           scoring=scoring,
-                                           cv=cv,
-                                           threshold=rf_threshold
-                                           )
-
-    elif name == "selectkbest":
-        selector = SelectKBest(score_func=k_score_func, k=top_k_best)
-
-    elif name == "grouplasso":
-        selector = GroupLassoFeatureSelector(alpha=group_lasso_alpha)
-    
-    elif name == "smartcorrelated":
-        selector = SmartCorrelatedSelection(method=corr_method,
-                                            threshold=corr_threshold,
-                                            selection_method="variance",
-                                            estimator=estimator,
-                                            cv=cv,
-                                            scoring=scoring
-                                        )
-    elif name == 'psi':
-        selector = ... # DropHighPSIFeatures()
-        raise NotImplementedError
-        
-
-    else:
-        raise NotImplementedError
-
-    return selector
-
-
-def get_feature_selector(name: str, config: dict) -> dict:
-    """
-    Get the configuration based on the name.
-    """
-    if name not in config:
-        raise ValueError(f"Model {name} not found in config.")
-
-    cfg = config[name].copy()
-
-    # Remove from the config dictionary
-    selector = cfg.pop("selector")
-
-    return selector, cfg
-
-
-# ------------ pyod detectors
-def fit_outliers_detectors(
-    detector_list: list[BaseDetector], X_train: np.ndarray
-) -> list[BaseDetector] | FeatureUnion:
-    model_list = list()
-    for model in tqdm(detector_list, desc="fitting-outliers-det-pyod"):
-        model.fit(X_train)
-        model_list.append(model)
-    return model_list
-
-
-def compute_score(det: BaseDetector, X):
-    score = det.decision_function(X)
-    return score.reshape(-1, 1)
-
-
-def fit_detector(det: BaseDetector, X):
-    return det.fit(X)
-
-
-def concat_outliers_scores_pyod(
-    fitted_detector_list: list[BaseDetector] | FeatureUnion,
-    X: np.ndarray,
-):
-    if isinstance(fitted_detector_list, list):
-        scores = []
-        for model in tqdm(fitted_detector_list, desc="concat-outliers-scores-pyod"):
-            score = model.decision_function(X)
-            score = score.reshape((-1, 1))
-            scores.append(score)
-
-        X_t = np.hstack([X] + scores)
-        return X_t
-
-    else:
-        raise NotImplementedError
-
-
-def load_transforms_pyod(
-    X_train: np.ndarray,
-    outliers_det_configs: dict,
-    fitted_detector_list: list[BaseDetector] = None,
-    return_fitted_models: bool = False,
-):
-    if fitted_detector_list is not None:
-        transform_func = partial(
-            concat_outliers_scores_pyod,
-            fitted_detector_list=fitted_detector_list,
-        )
-        if return_fitted_models:
-            return transform_func, return_fitted_models
-        else:
-            return transform_func
-
-    # assert isinstance(outliers_det_configs, dict), (
-    #     f"received {type(outliers_det_configs)}"
-    # )
-
-    model_list = list()
-
-    # instantiate detectors
-    names = sorted(outliers_det_configs.keys(), reverse=False)
-    for name in names:
-        detector, cfg = get_detector(name=name, config=outliers_det_configs)
-        detector = instantiate_detector(detector, cfg)
-        model_list.append(detector)
-
-    # fit detectors
-    model_list = fit_outliers_detectors(model_list, X_train)
-
-    # transform func
-    transform_func = partial(
-        concat_outliers_scores_pyod,
-        fitted_detector_list=model_list,
-    )
-
-    if return_fitted_models:
-        return transform_func, model_list
-
-    return transform_func
 
 
 class SpaCySimilarityEncoder(StringSimilarityEncoder):
@@ -698,7 +377,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
     def __init__(
         self,
-        cat_encoding_method: str = "binary",
+        cat_encoding_method: str = "hashing",
         add_imputer: bool = False,
         imputer_n_neighbors: int = 5,
         onehot_threshold: int = 9,
@@ -725,11 +404,8 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
     def load_cols_transformer(self, df: pd.DataFrame):
         # scalers
         scaler = StandardScaler()
-        onehot_encoder = OneHotEncoder(handle_unknown="ignore")
+        # transformers = []
 
-        # numeric columns
-        # numeric_cols =  df.select_dtypes(include=["number"]).columns
-        # numeric_cols = [col for col in numeric_cols]
         numeric_cols = make_column_selector(dtype_include=['number'])
         transformers = [("scaled_numeric", scaler, numeric_cols)]
 
@@ -738,21 +414,22 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
             print("Categorical columns will  pass-through.")
 
         else:
-            cols = df.select_dtypes(include=["object", "string", "category"]).columns
-            cols_onehot = [
-                col for col in cols if df[col].nunique() < self.onehot_threshold
-            ]
-            cols_cat_encode = [
-                col for col in cols if df[col].nunique() >= self.onehot_threshold
-            ]
-            cat_encoder = load_cat_encoding(
-                cat_encoding_method=self.cat_encoding_method,**self.cat_encoding_kwargs
-            )
-            transformers = transformers + [
-                ("onehot", onehot_encoder, cols_onehot),
-                ("cat_encode", cat_encoder, cols_cat_encode),
-            ]
+            # identity variables
+            ids_cols = ['CustomerUID','CUSTOMER_ID','AccountId']
+            ids_cols = [col for col in ids_cols if col in df.columns]
+            ids_encoder = load_cat_encoding(cat_encoding_method='count')
+            transformers.append(("ids_encode", ids_encoder, ids_cols))
 
+            # categorical variables
+            cat_columns = df.select_dtypes(include=["object", "string", "category"]).columns
+            cat_columns = [col for col in cat_columns if col not in ids_cols]
+            cat_encoder = load_cat_encoding(
+                cat_encoding_method=self.cat_encoding_method,
+                **self.cat_encoding_kwargs
+            )
+            transformers.append(("cat_encode", cat_encoder, cat_columns))
+            
+        
         col_transformer = ColumnTransformer(
             transformers, remainder="passthrough", n_jobs=self.n_jobs, verbose=False,verbose_feature_names_out=True
         )
@@ -895,7 +572,10 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         
         if self.add_fraud_rate_features:
             self._product_fraud_rate = (
-                df.groupby("ProductId")["TX_FRAUD"].mean().rename("ProductFraudRate")
+                df.groupby("ProductCategory",observed=False)["TX_FRAUD"].mean().rename("ProductFraudRate")
+            )
+            self._productid_fraud_rate = (
+                df.groupby("ProductId",observed=False)["TX_FRAUD"].mean().rename("ProductIdFraudRate")
             )
             self._provider_fraud_rate = (
                 df.groupby("ProviderId")["TX_FRAUD"].mean().rename("ProviderFraudRate")
@@ -992,6 +672,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         X["Hour"] = X["TX_DATETIME"].dt.hour
         X["DayOfWeek"] = X["TX_DATETIME"].dt.dayofweek
+        X["DayOfMonth"] = X["TX_DATETIME"].dt.day
+
 
         X.drop(columns=["TX_DATETIME"], inplace=True)
 
@@ -1000,8 +682,11 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
     def _add_temporal_features(self, df):
         df["Hour"] = df["TX_DATETIME"].dt.hour
         df["DayOfWeek"] = df["TX_DATETIME"].dt.dayofweek
+        df["DayOfMonth"] = df["TX_DATETIME"].dt.day
         df["IsWeekend"] = df["DayOfWeek"].isin([5, 6]).astype(int)
         df["IsNight"] = df["Hour"].between(0, 6).astype(int)
+        df["IsMonthEnd"] = df["TX_DATETIME"].dt.is_month_end * 1
+        df["IsMonthStart"] = df["TX_DATETIME"].dt.is_month_start * 1
 
         id_columns = ["AccountId", "CUSTOMER_ID"]
         if self.uid_col_name in df.columns:
@@ -1011,13 +696,13 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             df.sort_values(by=[col, "TX_DATETIME"], inplace=True)
 
             df[f"{col}_TimeSinceLastTxn"] = (
-                df.groupby(col)["TX_DATETIME"].diff().dt.total_seconds().fillna(0) / 60
+                df.groupby(col,observed=False)["TX_DATETIME"].diff().dt.total_seconds().fillna(0) / 60
             )
 
             df[f"{col}_Txn6hCount"] = (
                 df
                 .set_index("TX_DATETIME")
-                .groupby(col)["TRANSACTION_ID"]
+                .groupby(col,observed=False)["TRANSACTION_ID"]
                 .transform(lambda x: x.rolling('6h').count())
                 .reset_index(drop=True)
             )
@@ -1025,7 +710,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             df[f"{col}_Txn1dayCount"] = (
                 df
                 .set_index("TX_DATETIME")
-                .groupby(col)["TRANSACTION_ID"]
+                .groupby(col,observed=False)["TRANSACTION_ID"]
                 .transform(lambda x: x.rolling('1D').count())
                 .reset_index(drop=True)
             )
@@ -1033,7 +718,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             df[f"{col}_Txn3dayCount"] = (
                 df
                 .set_index("TX_DATETIME")
-                .groupby(col)["TRANSACTION_ID"]
+                .groupby(col,observed=False)["TRANSACTION_ID"]
                 .transform(lambda x: x.rolling('3D').count())
                 .reset_index(drop=True)
             )
@@ -1041,7 +726,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
             df[f"{col}_Txn7dayCount"] = (
                 df
                 .set_index("TX_DATETIME")
-                .groupby(col)["TRANSACTION_ID"]
+                .groupby(col,observed=False)["TRANSACTION_ID"]
                 .transform(lambda x: x.rolling('7D').count())
                 .reset_index(drop=True)
             )
@@ -1051,7 +736,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                 df[f"{col}_AvgAmount_{day}day"] = (
                     df
                     .set_index("TX_DATETIME")
-                    .groupby(col)["TX_AMOUNT"]
+                    .groupby(col,observed=False)["TX_AMOUNT"]
                     .transform(lambda x: x.rolling(window=f"{day}d", min_periods=1).mean())
                     .reset_index(drop=True)
                 )
@@ -1060,7 +745,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
     def _add_account_stats(self, df: pd.DataFrame):
         account_stats = (
-            df.groupby("AccountId")["TX_AMOUNT"]
+            df.groupby("AccountId",observed=False)["TX_AMOUNT"]
             .agg(["mean", "std"])
             .rename(columns={"mean": "AccountMeanAmt", "std": "AccountStdAmt"})
         )
@@ -1082,7 +767,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
     def _add_customer_stats(self, df):
         customer_stats = (
-            df.groupby("CUSTOMER_ID")["TX_AMOUNT"]
+            df.groupby("CUSTOMER_ID",observed=False)["TX_AMOUNT"]
             .agg(["mean", "std"])
             .rename(columns={"mean": "CustomerMeanAmt", "std": "CustomerStdAmt"})
         )
@@ -1103,7 +788,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         for value_col in ["TX_AMOUNT","Value"]:
             customer_stats = (
-                df.groupby(self.uid_col_name)[value_col]
+                df.groupby(self.uid_col_name,observed=False)[value_col]
                 .agg(["mean", "std"])
                 .rename(columns={"mean": f"ClientMean{value_col}", "std": f"ClientStd{value_col}"})
             )
@@ -1121,28 +806,48 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         return df
 
     def _add_categorical_cross_features(self, df):
-        df["Channel_ProductCategory"] = (
-            df["ChannelId"].astype(str) + "_" + df["ProductCategory"].astype(str)
-        )
-        df['ProductCategory_Account'] = df['ProductCategory'].astype(str) + "_" + df['AccountId'].astype(str)
         
-        df["Channel_PricingStrategy"] = (
-            df["ChannelId"].astype(str) + "_" + df["PricingStrategy"].astype(str)
-        )
-        df["Provider_Product"] = (
-            df["ProviderId"].astype(str) + "_" + df["ProductId"].astype(str)
-        )
+        for a,b in combinations(["ProductCategory",'PricingStrategy','ProviderId','ChannelId'],2):
+            df[f"{a}_{b}"] = (
+                df[a].astype(str) + "_" + df[b].astype(str) # was ProductId
+            )
+
+        for a,b,c in combinations(["ProductCategory",'PricingStrategy','ProviderId','ChannelId'],3):
+            df[f"{a}_{b}_{c}"] = (
+                df[a].astype(str) + "_" + df[b].astype(str) + "_" + df[c].astype(str)
+            )   
 
         return df
 
     def _add_temporal_identity_interactions(self, df):
-        df["IsNight_Android"] = df["IsNight"].astype(str) + df["ChannelId"].astype(str)
-        df["Weekend_Channel"] = df["IsWeekend"].astype(str) + df["ChannelId"].astype(
-            str
-        )
-        df["Hour_Channel"] = df["Hour"].astype(str) + "_" + df["ChannelId"].astype(str)
-        df['Hour_Account'] = df['Hour'].astype(str) + "_" + df['AccountId'].astype(str)
-        df['DayOfWeek_Account'] = df['DayOfWeek'].astype(str) + "_" + df['AccountId'].astype(str)
+        
+        df['DayOfWeek_Hour'] = df['DayOfWeek'].astype(str) + "_" + df['Hour'].astype(str)
+        
+        for a,b,c in combinations(["IsNight",'IsWeekend','ProviderId','ProductCategory','IsMonthEnd','IsMonthStart'],3):
+            df[f"{a}_{b}_{c}"] = (
+                df[a].astype(str) + "_" + df[b].astype(str)  + "_" + df[c].astype(str) 
+            )
+
+        for a,b, in combinations(["IsNight",'IsWeekend','ProviderId','ProductCategory','IsMonthStart'],2):
+            check = (a in ['ProviderId','ProductCategory']) and (b in ['ProviderId','ProductCategory'])
+            if check:
+                continue
+            df[f"{a}_{b}"] = (
+                df[a].astype(str) + "_" + df[b].astype(str)
+            )  
+
+        for a,b,c in combinations(['DayOfWeek','ProviderId','ProductCategory','Hour'],3):
+            df[f"{a}_{b}_{c}"] = (
+                df[a].astype(str) + "_" + df[b].astype(str)  + "_" + df[c].astype(str) 
+            )
+
+        for a,b in combinations(['DayOfWeek','ProviderId','ProductCategory','Hour','IsMonthEnd',],2):
+            check = (a in ['ProviderId','ProductCategory']) and (b in ['ProviderId','ProductCategory'])
+            if check:
+                continue
+            df[f"{a}_{b}_{c}"] = (
+                df[a].astype(str) + "_" + df[b].astype(str)  + "_" + df[c].astype(str) 
+            )
 
         return df
 
@@ -1151,7 +856,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         # daily number of transactions per account
         df["TxnDate"] = df["TX_DATETIME"].dt.date
         txn_freq = (
-            df.groupby(["AccountId", "TxnDate"])["TRANSACTION_ID"]
+            df.groupby(["AccountId", "TxnDate"],observed=False)["TRANSACTION_ID"]
             .count()
             .rename("DailyAccountTxnCount")
         )
@@ -1160,7 +865,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         ## daily number of transactions for each unique client
         if self.uid_col_name in df.columns:
             txn_freq = (
-                df.groupby([self.uid_col_name, "TxnDate"])["TRANSACTION_ID"]
+                df.groupby([self.uid_col_name, "TxnDate"],observed=False)["TRANSACTION_ID"]
                 .count()
                 .rename("DailyClientTxnCount")
             )
@@ -1169,11 +874,12 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         return df
 
     def _add_fraud_rate_features(self, df):
-        df = df.merge(self._product_fraud_rate, on="ProductId", how="left")
+        df = df.merge(self._productid_fraud_rate, on="ProductId", how="left")
+        df = df.merge(self._product_fraud_rate, on="ProductCategory", how="left")
         df = df.merge(self._provider_fraud_rate, on="ProviderId", how="left")
         df = df.merge(self._channel_fraud_rate, on="ChannelId", how="left")
 
-        for col in ["ProductFraudRate", "ProviderFraudRate", "ChannelIdFraudRate"]:
+        for col in ["ProductFraudRate", "ProviderFraudRate",'ProductIdFraudRate',"ChannelIdFraudRate"]:
             _mean = df[col].mean(skipna=True)
             df[col] = df[col].fillna(_mean)
 
@@ -1190,17 +896,17 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         
         for value_col in ['Value','TX_AMOUNT']:
             for col in _behavioral_drift_cols:
-                mean_7d = df.groupby(col)[value_col].transform(
+                mean_7d = df.groupby(col,observed=False)[value_col].transform(
                     lambda x: x.rolling("7d").mean()
                 )
-                std_7d = df.groupby(col)[value_col].transform(
+                std_7d = df.groupby(col,observed=False)[value_col].transform(
                     lambda x: x.rolling("7d").std()
                 ).replace(0, 1).fillna(1)
                 
-                mean_30d = df.groupby(col)[value_col].transform(
+                mean_30d = df.groupby(col,observed=False)[value_col].transform(
                     lambda x: x.rolling("30d").mean()
                 )
-                std_30d = df.groupby(col)[value_col].transform(lambda x: x.rolling("30d").std()
+                std_30d = df.groupby(col,observed=False)[value_col].transform(lambda x: x.rolling("30d").std()
                                                                ).replace(0, 1).fillna(1)
 
                 df[col + f"_{value_col}_RatioTo7dAvg"] = df[value_col] / mean_7d
@@ -1218,12 +924,12 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         for col in self.behavioral_drift_cols:
             df[f"{col}_MovingAvg5"] = (
-                df.groupby(col)["TX_AMOUNT"]
+                df.groupby(col,observed=False)["TX_AMOUNT"]
                 .transform(lambda x: x.rolling(window=5, min_periods=1).mean())
                 .reset_index(drop=True)
             )
             long_term_avg = (
-                df.groupby(col)["TX_AMOUNT"]
+                df.groupby(col,observed=False)["TX_AMOUNT"]
                 .agg(["mean"])
                 .rename(columns={"mean": f"{col}_LongTermAvg"})
             )
@@ -1236,12 +942,12 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
     def _compute_batch_gap_features(self, df):
         df = df.sort_values(by=["BatchId", "TX_DATETIME"])
-        batch_time = df.groupby("BatchId")["TX_DATETIME"].min().sort_values()
+        batch_time = df.groupby("BatchId",observed=False)["TX_DATETIME"].min().sort_values()
         batch_time_gap = (
             batch_time.diff().dt.total_seconds().rename("TimeBetweenBatches").fillna(0) / 60
         )
         txn_per_batch = (
-            df.groupby("BatchId")["TRANSACTION_ID"].count().rename("TxnPerBatch")
+            df.groupby("BatchId",observed=False)["TRANSACTION_ID"].count().rename("TxnPerBatch")
         )
         df = df.merge(txn_per_batch, on="BatchId", how="left")
         df = df.merge(batch_time_gap, left_on="BatchId", right_index=True, how="left")
@@ -1251,10 +957,10 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         id_col = self.uid_col_name if (self.uid_col_name in df.columns) else "AccountId"
         df = df.sort_values(by=[id_col, "TX_DATETIME"])
         timeDiff = (
-            df.groupby(id_col)["TX_DATETIME"].diff().dt.total_seconds().fillna(0) /60
+            df.groupby(id_col,observed=False)["TX_DATETIME"].diff().dt.total_seconds().fillna(0) /60
         )
         df["NewSession"] = (timeDiff > self.session_gap_minutes).fillna(True)
-        df["SessionId"] = df.groupby(id_col)["NewSession"].cumsum()
+        df["SessionId"] = df.groupby(id_col,observed=False)["NewSession"].cumsum()
         session_stats = (
             df.groupby([id_col, "SessionId"])
             .agg(
@@ -1313,7 +1019,8 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         if self.use_sincos:
             max_vals = {'hour':24,
-                        'dayofweek':6
+                        'dayofweek':6,
+                        'dayofmonth':30
                         }
             for feature in self._cyclical_features:
                 max_val = max_vals[str(feature).lower()]
@@ -1329,7 +1036,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         value_col = "TX_AMOUNT"
         time_col = "TX_DATETIME"
 
-        for group_val, group_df in df.groupby(group_key):
+        for group_val, group_df in df.groupby(group_key,observed=False):
             ts = group_df.set_index(time_col)[value_col].resample(freq).sum().interpolate(method='nearest') #.fillna(0)
 
             if len(ts) < period * 2:
@@ -1371,6 +1078,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
         df[nan_mask] = 0
 
         return df
+    
     # TODO: Debug
     def _add_grouped_fft_features(self, df, freq="D", top_n_freqs=5):
         features = []
@@ -1378,7 +1086,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
 
         for value_col in ["TX_AMOUNT","Value"]:
 
-            for group_val, group_df in df.groupby(group_key):
+            for group_val, group_df in df.groupby(group_key,observed=False):
                 ts = group_df.set_index("TX_DATETIME")[value_col].resample(freq).sum().interpolate(method='nearest') #.fillna(0)
 
                 if len(ts) < top_n_freqs * 2:
@@ -1407,7 +1115,7 @@ class FraudFeatureEngineer(TransformerMixin, BaseEstimator):
                 "AccountStdAmt",
                 "CustomerMeanAmt",
                 "CustomerStdAmt",
-                "TxnDate",
+                # "TxnDate",
             ],
             inplace=True,
         )
@@ -1430,9 +1138,12 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
                      "AccountId","CUSTOMER_ID"
                  ],
                  n_clusters:int=0,
+                 cat_encoder_name:str='hashing',
+                 cat_encoding_kwargs:dict={},
                  add_cum_features:bool=True,
                  add_lombscargle_features:bool=False,
                  add_amount_value_ratio:bool=True,
+                 reorder_by=['TX_DATETIME'],
                 #  lombscarge_value_cols=['TX_AMOUNT','Value'],
                  n_freqs=10):
         # Choose range: daily to weekly periodicity (assuming t is in hours)
@@ -1447,6 +1158,9 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         self.add_cum_features=add_cum_features
         self.add_amount_value_ratio=add_amount_value_ratio
         self.n_clusters = n_clusters
+        self.cat_encoder_name=cat_encoder_name
+        self.cat_encoding_kwargs=cat_encoding_kwargs
+        self.reorder_by=reorder_by
 
     def check_dataframe(self, X: pd.DataFrame):
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
@@ -1460,9 +1174,11 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X, y=None, **fit_params):
 
-        df = X.reset_index(drop=True)
-        self.check_dataframe(df)
-        
+        self.check_dataframe(X)
+
+        df = X.reset_index(drop=True).copy()
+        df.sort_values(by=["TX_DATETIME"], inplace=True)
+                
         # create_unique_identifier
         if self.col_uid_name not in df.columns:
             df[self.col_uid_name] = df[list(self.uid_cols)].apply(
@@ -1470,10 +1186,8 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
                 )
 
         if self.n_clusters > 0:
-            self._cat_encoder = load_cat_encoding(cat_encoding_method='binary',
-                                                  return_df=True,
-                                                  drop_invariant=False)
-            self._compute_clusters_customers(df)
+            self._cat_encoder = load_cat_encoding(cat_encoding_method=self.cat_encoder_name,**self.cat_encoding_kwargs)
+            self._compute_clusters_customers(df,)
         
         self.n_features_in_ = df.shape[1]
         self.feature_names_in_ = df.columns.tolist()
@@ -1504,6 +1218,8 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
 
         if self.n_clusters > 0:
             df = self._add_customer_clusters(df)
+        # TODO: debug
+        # df = self._add_cat_features_frequency(df)
         #-- TODO: debug behavior first
         # df = self._compute_client_value_counts(df, self.col_uid_name, ["ChannelId","ProductCategory",
         #                                                                "ProviderId","PricingStrategy"]
@@ -1517,14 +1233,22 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         
         self.check_dataframe(X)
 
+        if self.reorder_by is not None:
+            df = df.sort_values(by=self.reorder_by).reset_index(drop=True)
+
         return df
     
     # -------- advanced features
     def _add_categorical_temporal_features(self, df):
 
-        comb = product(['IsNight','IsWeekend'],['ChannelId','ProductCategory',
-                                                     'ProviderId','PricingStrategy',
-                                                     'ProductId'])
+        comb = product(['IsNight','IsWeekend'],[
+                                                'ChannelId',
+                                                'ProductCategory',
+                                                'ProviderId',
+                                                'PricingStrategy',
+                                                'ProductId'
+                                                ]
+                                            )
 
         for col1,col2 in comb:
             df[f"{col1}_{col2}"] = df[col1].astype(str) + '_' + df[col2].astype(str)
@@ -1532,7 +1256,7 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         
         return df
             
-    def _add_cumulative_features(self, df:pd.DataFrame):        
+    def _add_cumulative_features(self, df:pd.DataFrame):       
 
         id_cols = ["AccountId", "CUSTOMER_ID"]
         if self.col_uid_name in df.columns:
@@ -1542,17 +1266,60 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         
         for col in ['TX_AMOUNT','Value']:
             for group_key in id_cols:
-                df[f"{group_key}_TimeSinceLastTxn_Cumsum"] = df.groupby(group_key)[f"{group_key}_TimeSinceLastTxn"].cumsum()  / 60
-                df[f"{col}_Cumsum_{group_key}"] = df.groupby(group_key)[col].cumsum()
+                df[f"{group_key}_TimeSinceLastTxn_Cumsum"] = df.groupby(group_key,observed=False)[f"{group_key}_TimeSinceLastTxn"].cumsum()  / 60
+                df[f"{col}_Cumsum_{group_key}"] = df.groupby(group_key,observed=False)[col].cumsum()
         
         return df
     
+    #TODO debug
+    def _add_cat_features_frequency(self,df:pd.DataFrame):
+
+        def rolling_mode(series):
+            """Custom function to compute mode in a rolling window"""
+            if series.empty:
+                return np.nan
+            counts = Counter(series)
+            if not counts:
+                return np.nan
+            return counts.most_common(1)[0][0]
+        
+        def rolling_nunique(series):
+            """Custom function to compute number of unique values"""
+            return series.nunique()
+        
+        def rolling_value_counts(series):
+            """Custom function to compute value counts in a rolling window"""
+            if series.empty:
+                return pd.Series()
+            return pd.Series(Counter(series))
+        
+        def rolling_stats(group,target_col,freq):
+            s = group[target_col].rolling(freq)
+            return pd.DataFrame({
+                'count': s.count(),
+                'nunique': s.apply(rolling_nunique),
+                'mode': s.apply(rolling_mode),
+                'value_counts': s.apply(rolling_value_counts)
+            })       
+
+        for col in ["ChannelId", "ProductCategory", "ProviderId", "PricingStrategy"]:
+
+            df_sorted = df.sort_values(["TX_DATETIME", col])
+            df_sorted = df_sorted.set_index("TX_DATETIME")
+
+            for freq in ["1h", "1D", "3D", "7D"]:
+
+                stats = df_sorted.groupby(col,observed=False).apply(lambda x: rolling_stats(x,target_col=col,freq=freq)).reset_index()
+                df = df.merge(stats, on=[col, "TX_DATETIME"], how="left")
+
+        return df
+
     def _add_lombscargle_features(self,df:pd.DataFrame,value_col:str='TX_AMOUNT'):
 
         features = []
         freqs = np.linspace(1 / self.max_period, 1 / self.min_period, self.n_freqs)
 
-        for _, group in df.groupby(self.col_uid_name):
+        for _, group in df.groupby(self.col_uid_name,observed=False):
             t = group['TX_DATETIME'].diff().dt.total_seconds().fillna(0) / (60 * 60)  # convert to hours
             y = group[value_col].values
 
@@ -1580,7 +1347,7 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         for group_key in set(id_cols):
             for col in ['TX_AMOUNT','Value']:
                 df[col + "_diff_to_last_transaction"] = (
-                        df.groupby(group_key)[col].diff().fillna(0)
+                        df.groupby(group_key,observed=False)[col].diff().fillna(0)
                     )
         
         return df
@@ -1600,7 +1367,8 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         df = df.merge(cluster_data, on=self.col_uid_name, how="left")
 
         return df
-    
+        
+    # TODO debug
     def _compute_client_value_counts(self,
         df: pd.DataFrame,
         group_column: str,
@@ -1647,7 +1415,7 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         
         # Single groupby operation for all columns
         melted_df = (melted_df
-                        .groupby([group_column, "column", "value"])
+                        .groupby([group_column, "column", "value"],observed=False)
                         .size()
                         .reset_index(name="counts")
                         )
@@ -1662,7 +1430,6 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
         wide_format.columns = [f"{col}_perClient_{val}" for col, val in wide_format.columns]
         df_merged = df.merge(wide_format, on=self.col_uid_name, how='left')
         
-        
         return df_merged
      
     def _get_cluster_data(self,df):
@@ -1672,9 +1439,12 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
                 "Value": "mean",
                 f"{self.col_uid_name}_TimeSinceLastTxn":'mean',
                 'DailyClientTxnCount': 'mean',
-                "Hour":lambda x: x.mode().sort_values().iloc[0],
-                "DayOfWeek": lambda x: x.mode().sort_values().iloc[0],
+                "Hour":lambda x: x.mode().mean(),
+                "DayOfWeek": lambda x: x.mode().mean(),
+                'DayOfMonth': lambda x: x.mode().mean(),
                 "IsWeekend": 'mean',
+                'IsMonthEnd': 'mean',
+                'IsMonthStart': 'mean',
                 f"{self.col_uid_name}_Txn6hCount":'mean',
                 f"{self.col_uid_name}_Txn1dayCount":'mean',
                 f"{self.col_uid_name}_Txn3dayCount":'mean',
@@ -1706,7 +1476,7 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
 
         # -- compute aggregations
         cluster_data = (
-            df.groupby(self.col_uid_name)
+            df.groupby(self.col_uid_name,observed=False)
             .agg(agg)
         )
 
@@ -1728,127 +1498,8 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
                             threshold=0.5,
                             branching_factor=50)
         self._birch.fit(cluster_data)
-
+        
         return None
-
-    
-# TODO: debug
-class GroupLassoFeatureSelector(SelectorMixin, BaseEstimator):
-    """
-    Group Lasso-based feature selector for mixed categorical and numerical data.
-    Inherits from SelectorMixin for seamless pipeline integration.
-
-    Parameters
-    ----------
-    alpha : float, default=0.01
-        Regularization strength for group lasso.
-    """
-    def __init__(self, alpha=0.01):
-        self.alpha = alpha
-        self.scaler = StandardScaler()
-        
-        self.model = None
-        self.selected_idx_ = None
-        self.groups_ = None
-        self.feature_names_in_ = None
-        self.feature_names_encoded_ = None
-
-    def fit(self, X, y=None):  # noqa: D102
-        if not isinstance(X, pd.DataFrame):
-            raise ValueError("Input X must be a pandas DataFrame")
-        
-        X = X.reset_index(drop=True)
-
-        self.feature_names_in_ = list(X.columns)
-        
-        # Identify categorical columns
-        cat_cols = X.select_dtypes(include='category').columns.tolist()
-
-        # Encode categoricals
-        self._encoder = BinaryEncoder(drop_invariant=True,return_df=True)
-        if cat_cols:
-            X_cat = self._encoder.fit_transform(X[cat_cols],y=y)
-        else:
-            raise ValueError("No columns found in the DataFrame with dtype='category'")
-
-        # Numeric features
-        X_num = X.drop(columns=cat_cols, errors='ignore')
-        # Combine encoded and numeric
-        X_encoded = pd.concat([X_num, X_cat], axis=1)
-        self.feature_names_encoded_ = list(X_encoded.columns)
-
-        # Build group assignments
-        groups = []
-        # Numeric columns: no regularization
-        for _ in X_num.columns:
-            groups.append(-1)
-        # Categorical binary columns: each original category gets a group
-        for col in X_cat.columns:
-            orig = col.split('_')[0]
-            # group index is the position of orig in cat_cols + 1
-            grp = cat_cols.index(orig) + 1
-            groups.append(grp)
-        self.groups_ = groups
-
-        # Scale and fit GroupLasso
-        X_scaled = self.scaler.fit_transform(X_encoded)
-        self.model = GroupLasso(
-            groups=self.groups_,
-            group_reg=self.alpha,
-            l1_reg=0.0,
-            scale_reg='none',
-            supress_warning=True
-        )
-        self.model.fit(X_scaled, y)
-
-        # Selected feature indices in encoded space
-        coef = np.ravel(self.model.coef_)
-        self.selected_idx_ = np.where(~np.isclose(coef,0,atol=1e-3))[0]
-        return self
-
-    def _get_support_mask(self):  # noqa: D105
-        # Boolean mask for encoded features
-        mask = np.zeros(len(self.feature_names_encoded_), dtype=bool)
-        mask[self.selected_idx_] = True
-        return mask
-
-    def transform(self, X):  
-
-        if not isinstance(X, pd.DataFrame):
-            raise ValueError("Input X must be a pandas DataFrame")
-        
-        X = X.reset_index(drop=True)
-        
-        # Repeat encoding and scaling
-        cat_cols = X.select_dtypes(include='category').columns.tolist()
-        if cat_cols:
-            X_cat = self._encoder.transform(X[cat_cols])
-        else:
-            raise ValueError("No columns found in the DataFrame with dtype='category'")
-        
-        X_num = X.drop(columns=cat_cols, errors='ignore')
-        X_encoded = pd.concat([X_num, X_cat], axis=1)
-        X_scaled = self.scaler.transform(X_encoded)
-
-        # Apply support mask
-        mask = self._get_support_mask()
-        return X_scaled[:, mask]
-
-    def get_support(self, indices=False, **kwargs):  # noqa: D105
-        mask = self._get_support_mask()
-        if indices:
-            return np.where(mask)[0]
-        return mask
-
-    @property
-    def n_features_in_(self):
-        return len(self.self.feature_names_in_)
-
-    def feature_names_in(self):
-        return self.feature_names_in_
-    
-    def get_feature_names_out(input_features=None):
-        return 
 
 
 class PolyInteractions(TransformerMixin, BaseEstimator):
@@ -1871,8 +1522,7 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
         assert isinstance(X, pd.DataFrame), "Please provide a DataFrame"
         assert X.isna().sum().sum() < 1, "Found NaN values"
         assert "TX_FRAUD" not in X.columns, "Please drop TX_FRAUD column"
-        for col in self.cat_cols:
-            assert col in X.columns, f'{col} is not in the columns. Review the pipeline'
+        
 
     def fit_transform(self, X, y=None, **fit_params):
         self.fit(X=X, y=y, **fit_params)
@@ -1881,10 +1531,13 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
     def get_feature_names_out(self,input_features=None):
         return self._feature_name_out
     
-    def to_dataframe(self,X,name="col"):
+    def to_dataframe(self,X,name="poly_col_"):
 
+        column_names = [f"{name}_{i}" for i in range(X.shape[1])]
         if not isinstance(X,pd.DataFrame):
-            X = pd.DataFrame(X,columns=[f"{name}_{i}" for i in range(X.shape[1])])
+            X = pd.DataFrame(X,columns=column_names)
+        else:
+            X.columns=column_names
         
         return X
 
@@ -1895,9 +1548,16 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
         self.check_dataframe(X=X)
         X = X.reset_index(drop=True)
 
+        self._cat_cols = []
+        for col in self.cat_cols:
+            if col not in self.cat_cols:
+                print(f'{col} is not in the columns. It is skipped for polynomial interaction.')
+            else:
+                self._cat_cols.append(col)
+
         self._numeric_cols = X.select_dtypes(include='number').columns.tolist()
 
-        X_encoded = self.cat_encoder.fit_transform(X[self.cat_cols],y=y)
+        X_encoded = self.cat_encoder.fit_transform(X[self._cat_cols],y=y)
 
         X_encoded = self.to_dataframe(X_encoded)
         
@@ -1926,9 +1586,9 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
         X = X.reset_index(drop=True)
 
         try:
-            X_encoded = self.cat_encoder.transform(X=X[self.cat_cols],y=y)
+            X_encoded = self.cat_encoder.transform(X=X[self._cat_cols],y=y)
         except:
-            X_encoded = self.cat_encoder.transform(X=X[self.cat_cols])
+            X_encoded = self.cat_encoder.transform(X=X[self._cat_cols])
 
         X_encoded = self.to_dataframe(X_encoded)
 
@@ -1944,7 +1604,7 @@ class PolyInteractions(TransformerMixin, BaseEstimator):
    
 
 def load_workflow(
-        classifier=None,
+    classifier=None,
     cols_to_drop=None,
     pca_n_components=20,
     detector_list=None,
@@ -1963,27 +1623,27 @@ def load_workflow(
         "AccountId",
     ],
     feature_select_estimator=DecisionTreeClassifier(),
-    feature_selector_name: str | None = "selectkbest",
+    feature_selector_name: str | None = "smartcorrelated",
     top_k_best=10,
     seq_n_features_to_select=3,
     corr_method="spearman", # pearson, spearman, kendall
     corr_threshold: float = 0.8,
     windows_size_in_days=[1, 7, 30],
-    cat_encoding_method: str | None = "binary",
+    cat_encoding_method: str | None = "hashing",
     cat_similarity_encode:list=None,
     nlp_model_name='en_core_web_md',
     cat_encoding_kwargs={},
     add_poly_interactions=False,
     interaction_cat_cols=None,
     add_cum_features=True,
-    poly_degree=2,
-    poly_cat_encoder_name="binary",
+    poly_degree=1,
+    poly_cat_encoder_name="hashing",
     imputer_n_neighbors=9,
     add_fft=False,
     add_seasonal_features=False,
     use_nystrom=False,
-    use_sincos=True,
-    use_spline=False,
+    use_sincos=False,
+    use_spline=True,
     spline_degree=3,
     spline_n_knots=6,
     nystroem_kernel="poly",
@@ -1999,7 +1659,7 @@ def load_workflow(
     # preliminary feature expansion
     feature_engineer = FraudFeatureEngineer(
         windows_size_in_days=windows_size_in_days,
-        uid_cols=uid_cols,
+        uid_cols=list(uid_cols),
         reorder_by=list(reorder_by) if isinstance(reorder_by,Sequence) else reorder_by,
         add_fraud_rate_features=add_fraud_rate_features,
         session_gap_minutes=session_gap_minutes,
@@ -2020,8 +1680,11 @@ def load_workflow(
         feature_engineer_2 = AdvancedFeatureEngineer(min_period=6, # 6 hours
                                                     max_period = 24*3, # 1 day
                                                     col_uid_name=uid_col_name,
-                                                    uid_cols=uid_cols,
+                                                    uid_cols=list(uid_cols),
+                                                    cat_encoder_name='count',
+                                                    reorder_by=reorder_by,
                                                     add_cum_features=add_cum_features,
+                                                    cat_encoding_kwargs=cat_encoding_kwargs,
                                                     n_clusters=n_clusters,
                                                     add_lombscargle_features=False,
                                                     add_amount_value_ratio=True,
@@ -2060,10 +1723,7 @@ def load_workflow(
         interactor = PolyInteractions(
             cat_cols=interaction_cat_cols,
             cat_encoder=load_cat_encoding(cat_encoding_method=poly_cat_encoder_name,
-                                          hash_n_components=12,
-                                          base=10,
-                                          return_df=True,
-                                          drop_invariant=True),
+                                          **cat_encoding_kwargs),
             degree=poly_degree,
         )            
         

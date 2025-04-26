@@ -157,22 +157,22 @@
 
 # %% Dataset
 
-from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
-from fraudetect.dataset import load_data, MyDatamodule
-from fraudetect.config import Arguments
-from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
+# from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding
+# from fraudetect.dataset import load_data, MyDatamodule
+# from fraudetect.config import Arguments
+# from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
 
-COLUMNS_TO_DROP = [
-    "CurrencyCode",
-    "CountryCode",
-    "SubscriptionId",
-    "BatchId",
-    "CUSTOMER_ID",
-    "AccountId",
-    "TRANSACTION_ID",
-    "TX_DATETIME",
-    "TX_TIME_DAYS",
-]
+# COLUMNS_TO_DROP = [
+#     "CurrencyCode",
+#     "CountryCode",
+#     "SubscriptionId",
+#     "BatchId",
+#     "CUSTOMER_ID",
+#     "AccountId",
+#     "TRANSACTION_ID",
+#     "TX_DATETIME",
+#     "TX_TIME_DAYS",
+# ]
 
 
 # args = Arguments()
@@ -238,8 +238,10 @@ from fraudetect.preprocessing import FraudFeatureEngineer, FeatureEncoding,ToDat
 from fraudetect.preprocessing.preprocessing import (
     load_cols_transformer,
     fit_outliers_detectors,
+    load_feature_selector,
     ColumnDropper,
     load_workflow,
+    load_cat_encoding,
     Pipeline,
     FeatureUnion,
     OutlierDetector,
@@ -269,16 +271,26 @@ raw_data_pred = load_data(CURDIR / "../data/test.csv")
 
 # sklearn.set_config(enable_metadata_routing=True)
 
-COLUMNS_TO_DROP = [
-    "CurrencyCode",
-    "CountryCode",
-    "SubscriptionId",
-    "BatchId",
-    "CUSTOMER_ID",
-    "AccountId",
-    "TRANSACTION_ID",
-    "TX_DATETIME",
-]
+cols_to_drop = ["CurrencyCode",
+                    "CountryCode",
+                    "SubscriptionId",
+                    "BatchId",
+                    # "CUSTOMER_ID",
+                    # "AccountId",
+                    "TRANSACTION_ID",
+                    "TX_DATETIME",
+                    "TX_TIME_DAYS",
+                    "CustomerUID",
+    ]
+
+interaction_cat_cols= [
+                        'ChannelId',
+                        'PricingStrategy',
+                        'ProductId',
+                        'ProductCategory',
+                        'ProviderId',
+                        "CustomerCluster"
+                        ]
 
 
 y_train = raw_data_train["TX_FRAUD"]
@@ -318,48 +330,79 @@ model = instantiate_model(model, **model_cfg)
 
 
 workflow = load_workflow(
-    classifier=DecisionTreeClassifier(max_depth=15, max_features="sqrt", random_state=41),
-    cols_to_drop=COLUMNS_TO_DROP,#+["CustomerUID"],
-    feature_select_estimator=DecisionTreeClassifier(max_depth=15, max_features="sqrt", random_state=41),
-    pca_n_components=80,
-    detector_list=None,  # model_list,
-    session_gap_minutes=60 * 3,
-    uid_cols=[
-        # 'AccountId',
-        None
-    ],
+    classifier=None,
+    cols_to_drop=cols_to_drop,
+    pca_n_components=20,
+    detector_list=None,
+    n_splits=5,
+    cv_gap=5000,
+    scoring="f1",
+    onehot_threshold=6,
+    session_gap_minutes=60 * 36,
+    uid_cols=['AccountId','CUSTOMER_ID'],
     uid_col_name="CustomerUID",
-    reorder_by=['TX_DATETIME','AccountId'], # 
-    add_imputer=False,
-    feature_selector_name='None',  # "selectkbest", 'None'
-    top_k_best=50,
+    add_fraud_rate_features = False,
+    reorder_by=['TX_DATETIME','AccountId'],
+    behavioral_drift_cols=[
+                            "CustomerUID",
+                           'AccountId',
+                           ],
+    feature_selector_name = "smartcorrelated",
+    top_k_best=100,
+    seq_n_features_to_select=3,
+    corr_method="spearman", 
+    corr_threshold = 0.8,
     windows_size_in_days=[1, 7, 30],
-    cat_encoding_method='binary',
+    cat_encoding_method = "hashing",
+    cat_similarity_encode=None,
+    nlp_model_name='en_core_web_md',
+    cat_encoding_kwargs={'hash_n_components':7},
+    add_poly_interactions=True,
+    interaction_cat_cols=interaction_cat_cols,
+    add_cum_features=True,
+    poly_degree=1,
+    poly_cat_encoder_name="hashing",
     imputer_n_neighbors=9,
-    n_clusters=0,
-    do_pca=False,
-    verbose=True,
-    n_jobs=1,
-    add_fft=True,
-    add_seasonal_features=True,
-    use_nystrom=True,
-    nystroem_components=50,
-    nystroem_kernel="poly",
-    use_sincos=False,
-    use_spline=True,
+    add_fft=False,
+    add_seasonal_features=False,
+    use_nystrom=False,
+    use_sincos=True,
+    use_spline=False,
     spline_degree=3,
     spline_n_knots=6,
+    nystroem_kernel="poly",
+    nystroem_components=50,
+    add_imputer=False,
+    rfe_step=3,
+    n_clusters=5,
+    do_pca=False,
+    verbose=False,
+    n_jobs=2,
 )
 
 
 y_train = raw_data_train['TX_FRAUD']
 X_train = raw_data_train.drop(columns=['TX_FRAUD'])
 
-score = cross_val_score(workflow,X=X_train,y=y_train,cv=TimeSeriesSplit(n_splits=3,gap=5000),scoring='f1',n_jobs=8)
-print("score: ", score)
+X_preprocessed = workflow.fit_transform(X=X_train, y=y_train)
+
+# selector = load_feature_selector(name='sequential',
+#                                  rfe_step=1,
+#                                  n_features_to_select=60,
+#                                  scoring='f1')
+# selector.set_params(n_jobs=8)
+
+# X_selected = selector.fit_transform(X_preprocessed,y=y_train)
+
+# score = cross_val_score(model,
+#                         X=X_selected,y=y_train,
+#                         cv=TimeSeriesSplit(n_splits=5,gap=5000),
+#                         scoring='f1',
+#                         n_jobs=8)
+# print("score: ", score)
 # workflow.predict(X_train)
 
-# X_train_processed = workflow.fit_transform(X=X_train, y=y_train) #.score(X=raw_data_train,y=y_train)
+
 # X_pred = data_processor.transform(raw_data_pred)
 
 # print('X_train.shape: ',X_train.shape)
@@ -372,7 +415,7 @@ print("score: ", score)
 
 
 
-params_config = {f"model__{k}":v for k,v in model_cfgs.items() if isinstance(v, Sequence)}
+# params_config = {f"model__{k}":v for k,v in model_cfgs.items() if isinstance(v, Sequence)}
 
 
 # search_engine = RandomizedSearchCV(
@@ -381,9 +424,10 @@ params_config = {f"model__{k}":v for k,v in model_cfgs.items() if isinstance(v, 
 #     scoring='f1',
 #     cv=TimeSeriesSplit(n_splits=4,gap=5000),
 #     refit=True,
-#     n_jobs=1,
-#     n_iter=2,
-#     random_state=41,
+#     n_jobs=12,
+#     n_iter=10,
+#     error_score='raise',
+#     # random_state=41,
 #     verbose=True,
 # )
 

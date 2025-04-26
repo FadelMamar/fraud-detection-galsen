@@ -33,9 +33,12 @@ from lightgbm import LGBMClassifier
 from feature_engine.selection import SmartCorrelatedSelection
 
 from imblearn.under_sampling import NearMiss, EditedNearestNeighbours
-from imblearn.over_sampling import SMOTE, ADASYN, BorderlineSMOTE, SVMSMOTE
+from imblearn.over_sampling import SMOTE, ADASYN, BorderlineSMOTE, SVMSMOTE, KMeansSMOTE
 from imblearn.combine import SMOTEENN, SMOTETomek
-from imblearn.ensemble import BalancedRandomForestClassifier
+from imblearn.ensemble import (BalancedRandomForestClassifier,
+                               EasyEnsembleClassifier,
+                               BalancedBaggingClassifier,
+                               RUSBoostClassifier)
 
 from pyod.models.iforest import IForest
 from pyod.models.dif import DIF
@@ -211,10 +214,11 @@ outliers_detectors = OrderedDict(
 samplers = dict()
 
 # under sampling
-fracs = (np.arange(2, 5) * 4e-3).tolist()
+fracs = (np.linspace(1e-2,0.1,20)).tolist()
+n_neighbors=[3, 5, 7, 9]
 samplers["nearmiss"] = dict(
     sampling_strategy=fracs,
-    n_neighbors=[3, 5, 7, 9],
+    n_neighbors=n_neighbors,
     version=[
         1,
     ],
@@ -223,28 +227,40 @@ samplers["nearmiss"] = dict(
 # oversampling
 fracs = (np.arange(2, 5) * 4e-3).tolist()
 samplers["SMOTE"] = dict(
-    sampling_strategy=fracs, random_state=[41], k_neighbors=[3, 5, 7, 9], sampler=SMOTE
+    sampling_strategy=fracs, 
+    # random_state=[41], 
+    k_neighbors=n_neighbors, sampler=SMOTE
 )
 
 samplers["adasyn"] = dict(
-    sampling_strategy=fracs, random_state=[41], n_neighbors=[3, 5, 7, 9], sampler=ADASYN
+    sampling_strategy=fracs, 
+    # random_state=[41], 
+    n_neighbors=n_neighbors, 
+    sampler=ADASYN
 )
 
 samplers["borderlineSMOTE"] = dict(
     sampling_strategy=fracs,
-    random_state=[41],
+    # random_state=[41],
     m_neighbors=[3, 5, 7, 9],
-    k_neighbors=[5, 7, 10, 15, 20],
+    k_neighbors=n_neighbors,
     kind=["borderline-1", "borderline-2"],
     sampler=BorderlineSMOTE,
 )
 
+samplers["kmeansSMOTE"] = dict(
+    sampling_strategy=fracs,
+    # random_state=[41],
+    k_neighbors=n_neighbors,
+    sampler=KMeansSMOTE,
+)
+
 samplers["svmSMOTE"] = dict(
     sampling_strategy=fracs,
-    random_state=[41],
+    # random_state=[41],
     m_neighbors=[5, 7, 10, 15, 20],
     out_step=[0.1, 0.2, 0.5, 0.7],
-    k_neighbors=[3, 5, 7, 9],
+    k_neighbors=n_neighbors,
     sampler=SVMSMOTE,
 )
 
@@ -259,7 +275,9 @@ samplers["smoteENN"] = dict(
 )
 
 samplers["smoteTOMEK"] = dict(
-    sampling_strategy=fracs, random_state=[41], sampler=SMOTETomek
+    sampling_strategy=fracs, 
+    # random_state=[41], 
+    sampler=SMOTETomek
 )
 
 undersamplers = [
@@ -270,6 +288,7 @@ oversamplers = [
     "adasyn",
     "borderlineSMOTE",
     "svmSMOTE",
+    "kmeansSMOTE"
 ]
 combinedsamplers = [
     "smoteENN",
@@ -280,11 +299,13 @@ combinedsamplers = [
 # %% models
 models = dict()
 
-learning_rate = np.linspace(0.01,0.05,10).round(4).tolist()
+learning_rate = [1e-1,1e-2,1e-3] #np.linspace(1e-3,3e-1,10).round(4).tolist()
 C = np.logspace(1,4,50).tolist()
-n_estimators = np.arange(13, 16,step=2).tolist()
-max_depth = np.arange(4, 7).tolist()
-criterion=["entropy", "gini"]
+n_estimators = np.arange(7, 25).tolist()
+max_depth = np.arange(3, 6).tolist()
+criterion=["gini",]
+sampling_strategy=np.linspace(5e-2,2e-1,20).tolist()
+
 # own models
 models["clusterElastic"] = dict(
     en_l1_ratio=np.linspace(0.1, 0.9, 10).round(3).tolist(),
@@ -402,7 +423,7 @@ models["mlp"] = dict(
 models["decisionTree"] = dict(
     criterion=criterion,
     splitter=["best"],
-    max_depth=max_depth,
+    max_depth=list(range(7,15)),
     min_samples_split=[2,],
     min_samples_leaf=[1,],
     class_weight=[
@@ -457,15 +478,42 @@ models["balancedRandomForest"] = dict(
     random_state=[
         None,
     ],
-    # sampling_strategy=(np.arange(2, 5) * 4e-3).tolist(),
+    sampling_strategy=np.linspace(5e-2,2e-1,20).tolist(),
     model=BalancedRandomForestClassifier,
 )
+
+models["easyensemble"] = dict(
+    n_estimators=n_estimators,
+    warm_start=[False,True],
+    sampling_strategy=np.linspace(5e-2,2e-1,20).tolist(),
+    model=EasyEnsembleClassifier,
+)
+
+models["balancedBagging"] = dict(
+    n_estimators=n_estimators,
+    estimator=DecisionTreeClassifier(max_depth=4,class_weight='balanced'),
+    warm_start=[False,True],
+    sampler=ADASYN(),
+    max_samples=[0.8,0.85,0.9,0.95,1.],
+    max_features=[0.8,0.85,0.9,0.95,1.],
+    sampling_strategy=np.linspace(5e-2,2e-1,20).tolist(),
+    model=BalancedBaggingClassifier,
+)
+models["rusboostclassifier"] = dict(
+    estimator=DecisionTreeClassifier(max_depth=4,class_weight='balanced'),
+    n_estimators=n_estimators,
+    learning_rate=[1., 5e-1,5e-2],
+    sampling_strategy=np.linspace(5e-2,2e-1,20).tolist(),
+    model=RUSBoostClassifier,
+)
+
+
 
 models["gradientBoosting"] = dict(
     loss=["log_loss",],
     n_estimators=n_estimators,
-    learning_rate=learning_rate,
-    subsample=np.linspace(0.9,0.95,10).round(3).tolist(),
+    learning_rate=0.023,
+    subsample=np.linspace(0.8,1.,5).round(3).tolist(),
     criterion=["squared_error",],
     max_depth=max_depth,
     min_samples_split=[2,],
@@ -519,7 +567,7 @@ models["xgboost"] = dict(
     learning_rate=learning_rate,
     booster=["gbtree",],
     objective=["binary:logistic"],
-    tree_method=['hist','approx'],
+    tree_method=['hist',],
     scale_pos_weight=np.logspace(1, 3, num=10).tolist(),
     # subsample=np.linspace(0.5,1,num=10).round(3).tolist(),
     max_bin=[
@@ -564,14 +612,14 @@ models["catboost"] = dict(loss_function=['Logloss'],
                           )
 
 models["lgbm"] = dict(
-    n_estimators=n_estimators,
+    n_estimators=list(range(5,500,20)),
     objective=[
         "binary",
     ],
     class_weight=["balanced",],
     force_col_wise=[True,],
     # min_data_in_leaf=np.linspace(50,1000,100).round().astype(int).tolist(),
-    max_depth=max_depth,
+    max_depth=25,
     # num_leaves=np.linspace(10,50,30).round().astype(int).tolist(),
     verbosity=[-1],
     model=LGBMClassifier,
@@ -650,19 +698,19 @@ feature_selector = dict()
 #                                       tol=[1e-4],
 #                                       cv=[cv,]
 # )
-# feature_selector["selectkbest"] = dict(
-#     selector=SelectKBest,
-#     k=np.arange(50,140,step=5).tolist(),
-# )
-
-feature_selector["smartcorrelated"] = dict(
-    selector=SmartCorrelatedSelection,
-    method=['spearman',],
-    threshold=np.linspace(0.8,0.9,10).round(3).tolist(),
-    scoring=['f1',],
-    estimator=DecisionTreeClassifier(max_depth=7,random_state=41,class_weight='balanced'),
-    cv=TimeSeriesSplit(n_splits=3, gap=5000),
+feature_selector["selectkbest"] = dict(
+    selector=SelectKBest,
+    k=np.arange(30,60,step=5).tolist(),
 )
+
+# feature_selector["smartcorrelated"] = dict(
+#     selector=SmartCorrelatedSelection,
+#     method=['spearman',],
+#     threshold=0.82,
+#     scoring=['f1',],
+#     estimator=DecisionTreeClassifier(max_depth=7,random_state=41,class_weight='balanced'),
+#     cv=TimeSeriesSplit(n_splits=3, gap=5000),
+# )
                                         
 selectkbest_score_func=dict(f_classif=f_classif,
                             mutual_info_classif=mutual_info_classif,

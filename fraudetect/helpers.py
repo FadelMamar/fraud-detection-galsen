@@ -245,7 +245,7 @@ def get_train_delay_test_set(
     # That is, for each test day, all frauds known at (test_day-delay_period) are removed
 
     # First, get known defrauded customers from the training set
-    known_defrauded_customers = set(train_df[train_df.TX_FRAUD == 1].CUSTOMER_ID)
+    known_defrauded_customers = set(train_df[train_df.TX_FRAUD == 1].AccountId)
 
     # Get the relative starting day of training set (easier than TX_DATETIME to collect test data)
     start_tx_time_days_training = train_df.TX_TIME_DAYS.min()
@@ -265,14 +265,14 @@ def get_train_delay_test_set(
         ]
 
         new_defrauded_customers = set(
-            test_df_day_delay_period[test_df_day_delay_period.TX_FRAUD == 1].CUSTOMER_ID
+            test_df_day_delay_period[test_df_day_delay_period.TX_FRAUD == 1].AccountId
         )
         known_defrauded_customers = known_defrauded_customers.union(
             new_defrauded_customers
         )
 
         test_df_day = test_df_day[
-            ~test_df_day.CUSTOMER_ID.isin(known_defrauded_customers)
+            ~test_df_day.AccountId.isin(known_defrauded_customers)
         ]
 
         test_df.append(test_df_day)

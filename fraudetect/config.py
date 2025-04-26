@@ -45,9 +45,10 @@ class Arguments:
 
     run_name: str = "debug"
 
-    reorder_by:Sequence=('TX_DATETIME',)
+    reorder_by: Sequence = ("TX_DATETIME",)
 
     # data pre-processing
+    do_train_val_split:bool=False
     delta_train: int = 40
     delta_delay: int = 7
     delta_test: int = 20
@@ -62,15 +63,15 @@ class Arguments:
         "randomForest",
         "histGradientBoosting",
     )
-    behavioral_drift_cols:Sequence = ("AccountId", 'CustomerUID')
-    add_cum_features:bool = False
+    behavioral_drift_cols: Sequence = ("AccountId", "CustomerUID")
+    add_cum_features: bool = False
     session_gap_minutes: int = 30
     onehot_threshold: int = 9
     pyod_detectors: Sequence = ("iforest", "cblof", "loda", "knn")
     disable_pyod_outliers: bool = False
     disable_samplers: bool = False
     do_pca: bool = False  #  try pca
-    do_poly_expansion: bool = False # not used. does do anything
+    do_poly_expansion: bool = False  # not used. does do anything
     do_feature_selection: bool = False
     cv_n_iter: int = 20  # for cross validation
     cv_gap: int = 1051 * 5
@@ -79,45 +80,51 @@ class Arguments:
     n_jobs: int = 8
     scoring: str = "f1"
     cat_encoding_method: str = "binary"  # count, binary, base_n, hashing, 'None'
-    cat_encoding_methods: Sequence = ('binary','catboost','hashing',
-                                      'count','base_n','target_enc',
-                                      'woe','similarity')
+    cat_encoding_methods: Sequence = (
+        "binary",
+        "catboost",
+        "hashing",
+        "count",
+        "base_n",
+        "target_enc",
+        "woe",
+        "similarity",
+    )
+    poly_iterate_cat_encoders: Sequence = ("binary", "catboost", "woe", "count")
     cat_encoding_base_n: int = 4
     cat_encoding_hash_method: str = "md5"
     cat_encoding_hash_n_components: int = 8
     add_imputer: bool = False
-    imputer_n_neighbors:int=9
-    uid_col_name:str="CustomerUID"
-    uid_cols: Sequence = (
-        None,
-    )  # ("AccountId", "CUSTOMER_ID")  # or None to disable
+    imputer_n_neighbors: int = 9
+    uid_col_name: str = "CustomerUID"
+    uid_cols: Sequence = (None,)  # ("AccountId", "CUSTOMER_ID")  # or None to disable
     concat_features_encoding_kwargs = dict(
         cat_encoding_method="hashing", n_components=14
     )
 
     # cluster transactions
-    n_clusters: int = 0 
-    cluster_on_feature:int="AccountId"
+    n_clusters: int = 0
+    cluster_on_feature: int = "AccountId"
 
     add_fraud_rate_features: bool = False
 
     optuna_n_trials: int = 50
 
-    add_fft:bool=False
-    add_seasonal_features:bool=False
-    use_nystrom:bool=False
-    use_sincos:bool=False
-    use_spline:bool=False
+    add_fft: bool = False
+    add_seasonal_features: bool = False
+    use_nystrom: bool = False
+    use_sincos: bool = False
+    use_spline: bool = False
 
     cols_to_drop: Sequence[str] = None
     interaction_cat_cols: Sequence[str] = None
-    add_poly_interactions:bool=False
-    poly_degree:int=2
-    poly_cat_encoder_name:int="catboost"
-    iterate_poly_cat_encoder_name:bool=False
+    add_poly_interactions: bool = False
+    poly_degree: int = 2
+    poly_cat_encoder_name: int = "catboost"
+    iterate_poly_cat_encoder_name: bool = False
 
-    cat_similarity_encode:Sequence=('ProductCategory',)
-    nlp_model_name:str='en_core_web_md'
+    cat_similarity_encode: Sequence = ("ProductCategory",)
+    nlp_model_name: str = "en_core_web_md"
 
     # training parameters
     # max_epochs: int = 50

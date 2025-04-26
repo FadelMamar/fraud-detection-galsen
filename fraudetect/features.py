@@ -10,7 +10,7 @@ from .detectors import get_detector, instantiate_detector
 from category_encoders import BinaryEncoder, CountEncoder, HashingEncoder, BaseNEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import OneHotEncoder, RobustScaler, StandardScaler
+from sklearn.preprocessing import RobustScaler
 from sklearn.pipeline import Pipeline, FeatureUnion
 
 
