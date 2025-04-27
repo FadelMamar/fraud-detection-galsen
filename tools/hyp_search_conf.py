@@ -301,8 +301,8 @@ models = dict()
 
 learning_rate = [1e-1,1e-2,1e-3] #np.linspace(1e-3,3e-1,10).round(4).tolist()
 C = np.logspace(1,4,50).tolist()
-n_estimators = np.arange(7, 25).tolist()
-max_depth = np.arange(3, 6).tolist()
+n_estimators = np.arange(7, 25,step=2).tolist()
+max_depth = np.arange(2, 5).tolist()
 criterion=["gini",]
 sampling_strategy=np.linspace(5e-2,2e-1,20).tolist()
 
@@ -459,7 +459,6 @@ models["randomForest"] = dict(
     class_weight=["balanced",],
     max_features=[
         "sqrt",
-        None,
     ],
     random_state=[
         None,
@@ -474,7 +473,7 @@ models["balancedRandomForest"] = dict(
     min_samples_split=[2,],
     min_samples_leaf=[1,],
     class_weight=["balanced",],
-    max_features=["sqrt", None],
+    max_features=["sqrt",],
     random_state=[
         None,
     ],
@@ -485,39 +484,38 @@ models["balancedRandomForest"] = dict(
 models["easyensemble"] = dict(
     n_estimators=n_estimators,
     warm_start=[False,True],
-    sampling_strategy=np.linspace(5e-2,2e-1,20).tolist(),
+    sampling_strategy=np.linspace(5e-2,3e-1,20).tolist(),
     model=EasyEnsembleClassifier,
 )
 
 models["balancedBagging"] = dict(
     n_estimators=n_estimators,
-    estimator=DecisionTreeClassifier(max_depth=4,class_weight='balanced'),
+    estimator=DecisionTreeClassifier(max_depth=3,class_weight='balanced'),
     warm_start=[False,True],
-    sampler=ADASYN(),
-    max_samples=[0.8,0.85,0.9,0.95,1.],
-    max_features=[0.8,0.85,0.9,0.95,1.],
-    sampling_strategy=np.linspace(5e-2,2e-1,20).tolist(),
+    sampler=SMOTE(),
+    max_samples=[0.8,0.85,0.9,],
+    max_features=[0.8,0.85,0.9,],
+    sampling_strategy=np.linspace(5e-2,0.15,20).tolist(),
     model=BalancedBaggingClassifier,
 )
+
 models["rusboostclassifier"] = dict(
-    estimator=DecisionTreeClassifier(max_depth=4,class_weight='balanced'),
+    estimator=DecisionTreeClassifier(max_depth=3,class_weight='balanced',max_features='sqrt'),
     n_estimators=n_estimators,
-    learning_rate=[1., 5e-1,5e-2],
-    sampling_strategy=np.linspace(5e-2,2e-1,20).tolist(),
+    learning_rate=0.023,
+    sampling_strategy=np.linspace(0.05,0.15,20).tolist(),
     model=RUSBoostClassifier,
 )
 
-
-
 models["gradientBoosting"] = dict(
     loss=["log_loss",],
-    n_estimators=n_estimators,
+    n_estimators=list(range(15,30))[::2],
     learning_rate=0.023,
-    subsample=np.linspace(0.8,1.,5).round(3).tolist(),
-    criterion=["squared_error",],
-    max_depth=max_depth,
-    min_samples_split=[2,],
-    min_samples_leaf=[3,4],
+    subsample=0.85,
+    criterion="squared_error",
+    max_depth=3,
+    min_samples_split=2,
+    min_samples_leaf=3,
     max_features=[None,],
     random_state=[None],
     tol=1e-4,
@@ -534,13 +532,9 @@ models["histGradientBoosting"] = dict(
     loss=[
         "log_loss",
     ],
-    max_iter=[25, 50, 100, 500, 1000, 10000],
+    max_iter=[100, 500, 1000, 10000],
     learning_rate=learning_rate,
-    max_depth=[
-        5,
-        10,
-        15,
-    ],
+    max_depth=max_depth,
     l2_regularization=C,
     categorical_features=[
         "from_dtype",
@@ -573,7 +567,7 @@ models["xgboost"] = dict(
     max_bin=[
         255,
     ],
-    # colsample_bytree=np.linspace(0.3,1,num=10).round(3).tolist(),
+    colsample_bytree=np.linspace(0.8,0.9,num=10).round(3).tolist(),
     gamma=[
         0.0,
     ],
@@ -612,14 +606,14 @@ models["catboost"] = dict(loss_function=['Logloss'],
                           )
 
 models["lgbm"] = dict(
-    n_estimators=list(range(5,500,20)),
+    n_estimators=n_estimators,
     objective=[
         "binary",
     ],
     class_weight=["balanced",],
-    force_col_wise=[True,],
+    # force_col_wise=[True,],
     # min_data_in_leaf=np.linspace(50,1000,100).round().astype(int).tolist(),
-    max_depth=25,
+    max_depth=4,
     # num_leaves=np.linspace(10,50,30).round().astype(int).tolist(),
     verbosity=[-1],
     model=LGBMClassifier,
@@ -700,7 +694,7 @@ feature_selector = dict()
 # )
 feature_selector["selectkbest"] = dict(
     selector=SelectKBest,
-    k=np.arange(30,60,step=5).tolist(),
+    k=np.arange(37,50,step=3).tolist(),
 )
 
 # feature_selector["smartcorrelated"] = dict(
@@ -712,7 +706,8 @@ feature_selector["selectkbest"] = dict(
 #     cv=TimeSeriesSplit(n_splits=3, gap=5000),
 # )
                                         
-selectkbest_score_func=dict(f_classif=f_classif,
+selectkbest_score_func=dict(
+                            f_classif=f_classif,
                             mutual_info_classif=mutual_info_classif,
-                            r_regression=r_regression
+                            # r_regression=r_regression
                             )
