@@ -21,7 +21,7 @@ from itertools import product, combinations
 from sklearn.utils._param_validation import Interval
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import StandardScaler, SplineTransformer
+from sklearn.preprocessing import StandardScaler, SplineTransformer, RobustScaler
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.feature_selection import (
     mutual_info_classif,
@@ -403,7 +403,7 @@ class FeatureEncoding(TransformerMixin, BaseEstimator):
 
     def load_cols_transformer(self, df: pd.DataFrame):
         # scalers
-        scaler = StandardScaler()
+        scaler = RobustScaler() #StandardScaler()
         # transformers = []
 
         numeric_cols = make_column_selector(dtype_include=['number'])
