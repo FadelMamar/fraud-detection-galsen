@@ -24,10 +24,12 @@ from typing import Sequence
 import optuna
 from optuna.samplers import TPESampler
 from fraudetect import import_from_path
+from ..preprocessing import get_train_val_split
 from ..config import Arguments
 from ..dataset import load_data
 from ..preprocessing import load_workflow, get_feature_selector
 from ..detectors import get_detector, instantiate_detector
+from ..sampling import get_sampler, instantiate_sampler
 
 # try:
 #     import fireducks.pandas as pd
@@ -219,6 +221,8 @@ class Tuner(object):
         self,
         args: Arguments,
         verbose: int = 0,
+        val_window_days=30,
+        split_id_column="AccountId",
         cat_encoding_kwards: dict = {},
         feature_selector_kwargs: dict = {},
         tune_threshold:bool=False,
@@ -245,8 +249,17 @@ class Tuner(object):
         self.iterate_session_gap=iterate_session_gap
 
         raw_data_train = load_data(args.data_path)
-        self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
-        self.y_train = raw_data_train["TX_FRAUD"]
+
+        if self.args.do_train_val_split:
+            self.X_train, self.y_train, self.X_val, self.y_val = get_train_val_split(train_data=raw_data_train,
+                                                                 val_window_days=val_window_days,
+                                                                 id_column=split_id_column
+                                                                )
+            
+        else:
+            self.X_train = raw_data_train.drop(columns=['TX_FRAUD'])
+            self.y_train = raw_data_train["TX_FRAUD"]
+            self.X_val, self.y_val = None, None
 
         self.tune_threshold = tune_threshold
 
@@ -340,12 +353,6 @@ class Tuner(object):
             cat_encoding_method = trial.suggest_categorical(
                     "cat_encoding_method", self.args.cat_encoding_methods 
                 )
-            if cat_encoding_method == 'base_n':
-                self.cat_encoding_kwards['base'] = trial.suggest_int(
-                    "base", 3, 10, 1
-                )
-            elif cat_encoding_method == 'hashing':
-                self.cat_encoding_kwards['hash_n_components'] = 12
         else:
             #set handle categorical variables
             cat_encoding_method = self.args.cat_encoding_method
@@ -360,7 +367,7 @@ class Tuner(object):
             if str(self.args.cat_encoding_method) == 'None':
                 if model_name not in ['catboost','xgboost','histGradientBoosting','lgbm']:
                     # raise ValueError("The provided model does not support un-encoded categorical variables")
-                    cat_encoding_method = 'binary'
+                    cat_encoding_method = 'woe'
                     print(f"The provided model does not support un-encoded categorical variables. Using {cat_encoding_method} categorical variable encoder.")
         
         # PCA
@@ -393,14 +400,33 @@ class Tuner(object):
                 detector = instantiate_detector(detector, cfg)
                 detector_list.append(detector)
 
+
+        # select outlier detector for data aug
+        disable_samplers = trial.suggest_categorical(
+            "disable_sampling", [True, self.args.disable_samplers]
+        )
+        if not disable_samplers:
+            # cfgs = list()
+            sampler = trial.suggest_categorical(
+                "samplers",self.HYP_CONFIGS.undersamplers + self.HYP_CONFIGS.oversamplers
+                # self.HYP_CONFIGS.oversamplers + self.HYP_CONFIGS.combinedsamplers, 
+            )
+            cfg = self.sample_cfg_optuna(
+                trial, sampler, self.HYP_CONFIGS.samplers[sampler]
+            )
+            resampler, cfg = get_sampler(name=sampler, config={sampler: cfg})
+            resampler = instantiate_sampler(resampler, cfg)
+
+
         # feature selector:
-        # do_feature_selection = trial.suggest_categorical(
-        #     "select_features", [False, self.args.do_feature_selection]
-        # )
+        # do_feature_selection = self.args.do_feature_selection
+        do_feature_selection = trial.suggest_categorical(
+            "select_features", [False, self.args.do_feature_selection]
+        )
         selector_cfg = {}
         feature_selector_name = None
         k_score_func = None
-        do_feature_selection = self.args.do_feature_selection
+        
         if do_feature_selection:
             feature_selector_name = trial.suggest_categorical(
                 "feature_selector_name", self.HYP_CONFIGS.feature_selector.keys()
@@ -421,16 +447,18 @@ class Tuner(object):
                 use_nystrom=self.args.use_nystrom,
                 use_sincos=self.args.use_sincos,
                 use_spline=self.args.use_spline,
+                add_fraud_rate_features=self.args.add_fraud_rate_features,
+                add_cum_features = self.args.add_cum_features,
         )
-        for k,v in advanced_transformation.items():
-            advanced_transformation[k] = trial.suggest_categorical(
-                                        k, [False, v],
-                                    )
+        # for k,v in advanced_transformation.items():
+        #     advanced_transformation[k] = trial.suggest_categorical(
+        #                                 k, [False, v],
+        #                             )
         if advanced_transformation['use_nystrom']:
             advanced_transformation['nystroem_components'] = trial.suggest_int("nystroem_components", 35, 72, 5)
         
-        # pca
-        advanced_transformation['pca_n_components']= pca_n_components or 20
+        if do_pca:
+            advanced_transformation['pca_n_components']= pca_n_components or 20
 
         # feature selector cfg
         if k_score_func is not None:
@@ -460,7 +488,7 @@ class Tuner(object):
             poly_degree = trial.suggest_categorical('poly_degree_interact',[1,self.args.poly_degree])
             if self.args.iterate_poly_cat_encoder_name:
                 poly_cat_encoder_name = trial.suggest_categorical('poly_cat_encoder_name',
-                                                                  ['woe','catboost','count','binary'])
+                                                                  self.args.poly_iterate_cat_encoders)
             else:
                 poly_cat_encoder_name = self.args.poly_cat_encoder_name
             data_interaction_args = dict(
@@ -472,6 +500,14 @@ class Tuner(object):
                                         poly_cat_encoder_name=poly_cat_encoder_name
                             )
             advanced_transformation.update(data_interaction_args)
+        
+        # number of clusters
+        n_clusters = self.args.n_clusters
+        if self.args.n_clusters>0:
+            range_ = list(range(0,n_clusters+1))
+            range_.remove(1)
+            n_clusters = trial.suggest_categorical('n_clusters', range_)
+                                                
 
         #-- load workflow
         classifier = load_workflow(
@@ -479,10 +515,8 @@ class Tuner(object):
             cols_to_drop=self.args.cols_to_drop,
             detector_list=detector_list,
             cv_gap=self.args.cv_gap,
-            add_fraud_rate_features=self.args.add_fraud_rate_features,
             reorder_by=self.args.reorder_by,
             n_splits=self.args.n_splits,
-            add_cum_features = self.args.add_cum_features,
             behavioral_drift_cols=list(self.args.behavioral_drift_cols),
             add_imputer=self.args.add_imputer,
             session_gap_minutes=session_gap_minutes,
@@ -492,7 +526,7 @@ class Tuner(object):
             cat_encoding_method=cat_encoding_method,
             cat_encoding_kwargs=self.cat_encoding_kwards,
             imputer_n_neighbors=self.args.imputer_n_neighbors,
-            n_clusters=self.args.n_clusters,
+            n_clusters=n_clusters,
             do_pca=do_pca,
             verbose=self.verbose,
             n_jobs=self.args.n_jobs,
@@ -525,61 +559,43 @@ class Tuner(object):
         X = self.X_train.copy()
         y = self.y_train.copy()
 
-        # get results
-        results = cross_validate(estimator=classifier,
-                        X=X,
-                        y=y,
-                        return_estimator=True,
-                        cv=TimeSeriesSplit(n_splits=self.args.n_splits,
-                                           gap=self.args.cv_gap),
-                        scoring=self.args.scoring, #evaluate
-                        error_score='raise',
-                        n_jobs=self.args.n_jobs,
-                        pre_dispatch=self.args.n_jobs,
-                    )
-        
-        
-        
-        scores = []
-        if isinstance(self.args.scoring,Sequence):
-            scores = [np.mean(results[f"test_{metric}"]) for metric in self.args.scoring]
-        else:
-            scores = np.mean(results["test_score"])
-        
-        #- save checkpoint
-        estimators_cv_splits = results['estimator']
-        fitness = np.mean(scores)
-        self.save_checkpoint(model_name=model_name, score=fitness, results=estimators_cv_splits)
+        if self.args.do_train_val_split:
+            X_val = self.X_val.copy()
+            y_val = self.y_val.copy()
+            classifier.fit(X,y)
 
-        trial.report(fitness, self.count_iter)
-        if trial.should_prune():
-            raise optuna.TrialPruned()
+            if isinstance(self.args.scoring,Sequence):
+                scores = [get_scorer(scoring=metric)(classifier,X_val,y_val) for metric in self.args.scoring]
+            else:
+                scores = get_scorer(scoring=self.args.scoring)(classifier,X_val,y_val)
+
+            results = {'estimator':classifier}
+
+        else:
+            # get results
+            results = cross_validate(estimator=classifier,
+                            X=X,
+                            y=y,
+                            return_estimator=True,
+                            cv=TimeSeriesSplit(n_splits=self.args.n_splits,
+                                            gap=self.args.cv_gap),
+                            scoring=self.args.scoring, #evaluate
+                            error_score='raise',
+                            n_jobs=self.args.n_jobs,
+                            pre_dispatch=self.args.n_jobs,
+                        )
+                
+            scores = []
+            if isinstance(self.args.scoring,Sequence):
+                scores = [np.mean(results[f"test_{metric}"]) for metric in self.args.scoring]
+            else:
+                scores = np.mean(results["test_score"])
+        
+
+        #- save checkpoint
+        estimator = results['estimator']
+        fitness = np.mean(scores)
+        self.save_checkpoint(model_name=model_name, score=fitness, results=estimator)
 
         return fitness
 
-        # #-- cv gridsearch
-        # results = self._run(
-        #     classifier=classifier,
-        #     params_config=params_config,
-        #     X_train=X,
-        #     y_train=y,
-        #     save_path=None,
-        #     verbose=self.verbose,
-        # )
-
-        # try to get score
-        # try:
-            # score = results.best_score_
-            # results["fitted_models_pyod"] = fitted_models_pyod  # log pyod models
-            # results["samplers"] = (sampler_names, sampler_cfgs)
-            # self.save_checkpoint(model_name=model_name, score=score, results=results)
-
-        # except ValueError:
-        #     traceback.print_exc()
-            # print(results, "\n")
-            # score = 0
-
-        # if isinstance(self.args.scoring,Sequence):
-        #     return tuple(scores)
-        # else:
-        #     return scores
