@@ -1138,7 +1138,7 @@ class AdvancedFeatureEngineer(TransformerMixin, BaseEstimator):
                      "AccountId","CUSTOMER_ID"
                  ],
                  n_clusters:int=0,
-                 cat_encoder_name:str='hashing',
+                 cat_encoder_name:str='count',
                  cat_encoding_kwargs:dict={},
                  add_cum_features:bool=True,
                  add_lombscargle_features:bool=False,
