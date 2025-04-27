@@ -24,6 +24,8 @@ from typing import Sequence
 import optuna
 from optuna.samplers import TPESampler
 from fraudetect import import_from_path
+from catboost import Pool, EShapCalcType, EFeaturesSelectionAlgorithm
+
 from ..preprocessing import get_train_val_split
 from ..config import Arguments
 from ..dataset import load_data
@@ -67,7 +69,7 @@ def sample_model_cfg(model_cfg: dict) -> dict:
     """
     sampled_cfg = {}
     for key, value in model_cfg.items():
-        if isinstance(value, Iterable):
+        if isinstance(value, Sequence):
             sampled_cfg[key] = random.choice(value)
         else:
             sampled_cfg[key] = value
@@ -405,6 +407,7 @@ class Tuner(object):
         disable_samplers = trial.suggest_categorical(
             "disable_sampling", [True, self.args.disable_samplers]
         )
+        resampler = None
         if not disable_samplers:
             # cfgs = list()
             sampler = trial.suggest_categorical(
@@ -562,7 +565,68 @@ class Tuner(object):
         if self.args.do_train_val_split:
             X_val = self.X_val.copy()
             y_val = self.y_val.copy()
-            classifier.fit(X,y)
+            
+
+            if model_name == "catboost":
+
+                # assert not do_feature_selection, "Disable feature selection"
+
+                # classifier.fit(X,y)
+
+                preprocessor = classifier[:-1]
+                model = classifier[-1]
+
+                X = preprocessor.fit_transform(X,y)
+                train_pool = Pool(X,y,
+                                  timestamp=self.X_train['TX_DATETIME'].diff().dt.total_seconds().fillna(0).astype(float)/60,
+                                #   weight=y*1e3,
+                                  )
+                
+                X_val = preprocessor.transform(X_val)
+                val_pool = Pool(X_val,
+                                y_val,
+                                timestamp=self.X_val['TX_DATETIME'].diff().dt.total_seconds().fillna(0).astype(float)/60
+                            )
+
+                model.fit(train_pool,
+                            use_best_model=True,
+                            eval_set=val_pool
+                        )
+
+                # summary = model.select_features(
+                #                     train_pool,
+                #                     eval_set=val_pool,
+                #                     features_for_select=list(range(X.shape[1])),
+                #                     num_features_to_select=50,
+                #                     steps=3,
+                #                     algorithm=EFeaturesSelectionAlgorithm.RecursiveByShapValues,
+                #                     shap_calc_type=EShapCalcType.Regular,
+                #                     train_final_model=True,
+                #                     logging_level='Silent',
+                #                     plot=False
+                #                 )
+
+                # selected_features_indices = summary['selected_features']
+
+                ## get score
+                scores = list()
+                for i in range(max(model.tree_count_-1, 1)):
+                    y_pred_val = model.predict( val_pool,
+                                                prediction_type='Class',
+                                                ntree_start=i,
+                                                ntree_end=model.get_best_iteration()
+                                            )
+                    score = f1_score(y_true=y_val,
+                                y_pred=y_pred_val
+                                )
+                    scores.append(score)
+                fitness = scores[np.argmax(scores)]   
+
+                self.save_checkpoint(model_name=model_name, score=fitness, results=classifier)
+                return fitness
+
+            else:
+                classifier.fit(X,y)
 
             if isinstance(self.args.scoring,Sequence):
                 scores = [get_scorer(scoring=metric)(classifier,X_val,y_val) for metric in self.args.scoring]

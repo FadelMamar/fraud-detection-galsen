@@ -214,7 +214,7 @@ outliers_detectors = OrderedDict(
 samplers = dict()
 
 # under sampling
-fracs = (np.linspace(1e-2,0.1,20)).tolist()
+fracs = (np.linspace(0.05,0.15,10)).tolist()
 n_neighbors=[3, 5, 7, 9]
 samplers["nearmiss"] = dict(
     sampling_strategy=fracs,
@@ -301,8 +301,8 @@ models = dict()
 
 learning_rate = [1e-1,1e-2,1e-3] #np.linspace(1e-3,3e-1,10).round(4).tolist()
 C = np.logspace(1,4,50).tolist()
-n_estimators = np.arange(7, 25,step=2).tolist()
-max_depth = np.arange(2, 5).tolist()
+n_estimators = np.arange(15, 30,step=2).tolist()
+max_depth = np.arange(2, 4).tolist()
 criterion=["gini",]
 sampling_strategy=np.linspace(5e-2,2e-1,20).tolist()
 
@@ -556,22 +556,22 @@ models["histGradientBoosting"] = dict(
 )
 
 models["xgboost"] = dict(
-    n_estimators=n_estimators,
-    max_depth=max_depth,
-    learning_rate=learning_rate,
+    n_estimators=np.arange(10,500,10).tolist(),
+    max_depth=2,
+    learning_rate=0.1,
     booster=["gbtree",],
     objective=["binary:logistic"],
     tree_method=['hist',],
-    scale_pos_weight=np.logspace(1, 3, num=10).tolist(),
-    # subsample=np.linspace(0.5,1,num=10).round(3).tolist(),
+    scale_pos_weight=1e3,
+    subsample=np.linspace(0.5,1,num=10).round(3).tolist(),
     max_bin=[
         255,
     ],
-    colsample_bytree=np.linspace(0.8,0.9,num=10).round(3).tolist(),
+    colsample_bytree=np.linspace(0.1,0.5,num=10).round(3).tolist(),
     gamma=[
         0.0,
     ],
-    # reg_lambda=np.logspace(1, 3, num=50).tolist(),
+    reg_lambda=1e4,
     reg_alpha=[
         0.0,
     ],
@@ -594,27 +594,33 @@ models["xgboost"] = dict(
     model=XGBClassifier,
 )
 
-models["catboost"] = dict(loss_function=['Logloss'],
-                          eval_metric=['PRAUC'],
-                          model_size_reg=C,
-                          max_depth=max_depth,
-                        #   rsm=np.linspace(0.3,1.,20).tolist(),
-                          learning_rate=learning_rate,
-                          scale_pos_weight=np.logspace(1, 3, num=10).tolist(),
-                          n_estimators=n_estimators,
+models["catboost"] = dict(loss_function=['Logloss',],
+                          eval_metric=['F1:use_weights=false',],
+                          depth=2,
+                          learning_rate=0.1,
+                          subsample=0.73,
+                          rsm=0.377,
+                          l2_leaf_reg=1e4,
+                          use_best_model=True,
+                          early_stopping_rounds=50,
+                          scale_pos_weight=1e3,
+                          iterations=1000,
+                          verbose=[0,],
                           model=CatBoostClassifier
                           )
 
 models["lgbm"] = dict(
-    n_estimators=n_estimators,
+    n_estimators=np.arange(10,500,10).tolist(),
+    boosting_type=['gbdt','rf',],
     objective=[
         "binary",
     ],
     class_weight=["balanced",],
-    # force_col_wise=[True,],
-    # min_data_in_leaf=np.linspace(50,1000,100).round().astype(int).tolist(),
-    max_depth=4,
-    # num_leaves=np.linspace(10,50,30).round().astype(int).tolist(),
+    learning_rate=0.1,
+    colsample_bytree=0.3,
+    subsample=0.56,
+    num_leaves=[31,],
+    max_depth=2,
     verbosity=[-1],
     model=LGBMClassifier,
 )
@@ -694,7 +700,7 @@ feature_selector = dict()
 # )
 feature_selector["selectkbest"] = dict(
     selector=SelectKBest,
-    k=np.arange(37,50,step=3).tolist(),
+    k=np.arange(40,70,step=5).tolist(),
 )
 
 # feature_selector["smartcorrelated"] = dict(

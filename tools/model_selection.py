@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import os
 import joblib
+import numpy as np
 import json
 import optuna
 import mlflow
@@ -35,11 +36,16 @@ if __name__ == "__main__":
         # "mlp",
         # "decisionTree",
         # "clusterElastic",
+        # 'extraTrees',
         # "logisticReg",
         # "svc",
         # "randomForest",
         # "balancedRandomForest",
-        "gradientBoosting",
+        # 'easyensemble',
+        # 'balancedBagging',
+        # 'rusboostclassifier',
+        # "gradientBoosting",
+        # 'adaBoostClassifier',
         # "histGradientBoosting",
         # "catboost",
         # 'lgbm',
@@ -48,21 +54,21 @@ if __name__ == "__main__":
 
     current_time = datetime.now().strftime("%H-%M")
 
-    mlflow_exp_name = "ensemble-trees" 
+    mlflow_exp_name = "ensemble-trees-3" 
     args.study_name = mlflow_exp_name
     args.study_name = args.study_name + f"_{str(date.today())}_{current_time}"
 
-    args.optuna_n_trials = 300
+    args.optuna_n_trials = 100
 
     # args.cv_n_iter = 200 # not used
-    args.scoring = ["f1", "average_precision"]  # ["f1", "average_precision", "precision", "recall"]
+    args.scoring = ["f1",]  # ["f1", "average_precision", "precision", "recall"]
     args.cv_method = "optuna"  # optuna random
-    args.cv_gap = 1051 * 5
-    args.n_splits = 5  #
-    args.n_jobs = 10 # for hyp tuning
-    args.delta_train = 50
-    args.delta_delay = 7
-    args.delta_test = 20 
+    args.cv_gap = int(19e3) #1051 * 5 * 2
+    args.n_splits = 2  #
+    args.n_jobs = 1 # for hyp tuning
+   
+    args.do_train_val_split=True
+    val_window_days= 30
 
     args.random_state = 41  # for data prep
 
@@ -70,69 +76,77 @@ if __name__ == "__main__":
                     "CountryCode",
                     "SubscriptionId",
                     "BatchId",
-                    "CUSTOMER_ID",
-                    "AccountId",
+                    # "CUSTOMER_ID", -> encoded using count based encoding
+                    # "AccountId",  -> encoded using count based encoding
                     "TRANSACTION_ID",
                     "TX_DATETIME",
                     "TX_TIME_DAYS",
-                    "Hour_Account",
-                    "DayOfWeek_Account",
-                    "ProductCategory_Account",
-                    "CustomerCluster",
-                    "CustomerUID",
-    ]
+    ]   
 
     args.interaction_cat_cols= [
-                        'ChannelId',
-                        'PricingStrategy',
-                        'ProductId',
-                        'ProductCategory',
-                        'ProviderId'
+                                'ChannelId',
+                                'PricingStrategy',
+                                'ProductId',
+                                'ProductCategory',
+                                'ProviderId',
                         ]
     args.add_poly_interactions = True
     args.poly_degree=1
-    args.iterate_poly_cat_encoder_name=False
-    args.poly_cat_encoder_name="binary" # or woe or catboost or binary -> used if iterate_poly_cat_encoder_name=False
+    args.iterate_poly_cat_encoder_name=False 
+    args.poly_iterate_cat_encoders = [
+                                      'hashing',
+                                      'count'
+                                    ]
+    args.poly_cat_encoder_name="count" # or woe or catboost or binary -> used if iterate_poly_cat_encoder_name=False
 
     args.nlp_model_name = 'en_core_web_sm' # en-core-web-sm en_core_web_md
     args.cat_similarity_encode = None #['ProductCategory',] # None ProductCategory
 
-    args.n_clusters = 0
+    args.n_clusters = 5 # maximum number to try for clustering clients
+    
 
-    # cols to concat and form a UID
+    # ---
+    args.behavioral_drift_cols = ("CustomerUID",)
     args.uid_col_name="CustomerUID"
     args.uid_cols = (
         "AccountId", "CUSTOMER_ID" # or None
     )
-    # dropping uid of client if exists
-    if all(args.uid_cols):
-        cols_to_drop.append(args.uid_col_name)
+
+    args.reorder_by = ['TX_DATETIME','AccountId'] #  'CUSTOMER_ID' ) # AccountId, args.uid_col_name
+
     
     args.cols_to_drop = cols_to_drop
 
-    args.add_fraud_rate_features = False
+    args.add_fraud_rate_features = True
 
-    iterate_session_gap = True
-    args.session_gap_minutes = 60 * 12
+    args.add_cum_features = True
+
+    iterate_session_gap = False
+    args.session_gap_minutes = 2448 #(np.linspace(12,48,6)*60).round().astype(int).tolist()
 
     iterate_cat_method = True # if True, then args.cat_encoding_method is not used
+    args.cat_encoding_method = "woe"
     args.cat_encoding_methods = (
-                                'binary',
-                                # 'catboost',
+                                # 'hashing',
+                                'catboost',
+                                'target_enc',
                                 # 'count',
-                                # 'woe', 
+                                'woe', 
                                 # 'similarity' only suitable for ProductCategory
                                 )
-
-    args.do_pca = False  # try pca
-    args.do_feature_selection = True
-    args.add_fft=False
-    args.add_seasonal_features=False
-    args.use_nystrom=False
-    args.use_sincos=False
-    args.use_spline=True
     
-    args.reorder_by = ('TX_DATETIME','AccountId')
+    # Dimensionality reduction
+    args.do_pca = False  # try pca
+    args.do_feature_selection = False 
+    args.use_nystrom=False
+    
+    # cyclical features transformation
+    args.use_sincos=True
+    args.use_spline=False
+    
+    # extract season features from TX_AMOUNT and Value
+    args.add_seasonal_features=False
+    args.add_fft=False    
 
     args.disable_pyod_outliers = True
     args.pyod_detectors = [
@@ -153,10 +167,10 @@ if __name__ == "__main__":
     args.add_imputer = False  # handle missing values at prediction time
     args.imputer_n_neighbors=9
     
-    args.cat_encoding_method = "binary"  # to handle unknown values effectively, 'catboost', 'binary', 'hashing', 'None'
-    args.cat_encoding_hash_n_components = 12  # if cat_encoding_method='hashing'
+    # to handle unknown values effectively, 'catboost', 'hashing', 'woe', 'count'
+    args.cat_encoding_hash_n_components = 6  # if cat_encoding_method='hashing'
     args.cat_encoding_base_n = 4  # if cat_encoding_method=base_n
-    args.onehot_threshold = 6
+    # args.onehot_threshold = 6 # one_hot is disabled
     args.windows_size_in_days = (1, 3, 7, 30)
     cat_encoding_kwards = dict(
         hash_n_components=args.cat_encoding_hash_n_components,
@@ -187,6 +201,7 @@ if __name__ == "__main__":
     study = optuna.create_study(
         sampler=TPESampler(multivariate=True, group=True),
         study_name=args.study_name,
+        pruner=optuna.pruners.HyperbandPruner(),
         load_if_exists=True,
         storage="sqlite:///hypsearch.sql",
         **opt_direction
@@ -199,6 +214,7 @@ if __name__ == "__main__":
     objective_optuna = Tuner(
         args=args, 
         verbose=0, 
+        val_window_days=val_window_days,
         cat_encoding_kwards=cat_encoding_kwards,
         tune_threshold=False,
         iterate_cat_method=iterate_cat_method,
