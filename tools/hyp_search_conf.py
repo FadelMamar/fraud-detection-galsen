@@ -301,7 +301,7 @@ models = dict()
 
 learning_rate = [1e-1,1e-2,1e-3] #np.linspace(1e-3,3e-1,10).round(4).tolist()
 C = np.logspace(1,4,50).tolist()
-n_estimators = np.arange(15, 30,step=2).tolist()
+n_estimators = np.arange(15, 200,step=2).tolist()
 max_depth = np.arange(2, 4).tolist()
 criterion=["gini",]
 sampling_strategy=np.linspace(5e-2,2e-1,20).tolist()
@@ -503,20 +503,20 @@ models["rusboostclassifier"] = dict(
     estimator=DecisionTreeClassifier(max_depth=3,class_weight='balanced',max_features='sqrt'),
     n_estimators=n_estimators,
     learning_rate=0.023,
-    sampling_strategy=np.linspace(0.05,0.15,20).tolist(),
+    sampling_strategy=np.linspace(0.05,0.15,10).tolist(),
     model=RUSBoostClassifier,
 )
 
 models["gradientBoosting"] = dict(
     loss=["log_loss",],
-    n_estimators=list(range(15,30))[::2],
+    n_estimators=list(range(150,800))[::25],
     learning_rate=0.023,
-    subsample=0.85,
-    criterion="squared_error",
-    max_depth=3,
+    subsample=[0.95,],
+    criterion=["squared_error",],
+    max_depth=[3,],
     min_samples_split=2,
     min_samples_leaf=3,
-    max_features=[None,],
+    max_features=['sqrt',],
     random_state=[None],
     tol=1e-4,
     model=GradientBoostingClassifier,
@@ -700,7 +700,7 @@ feature_selector = dict()
 # )
 feature_selector["selectkbest"] = dict(
     selector=SelectKBest,
-    k=np.arange(40,70,step=5).tolist(),
+    k=np.arange(5,20,step=3).tolist(),
 )
 
 # feature_selector["smartcorrelated"] = dict(
@@ -713,7 +713,7 @@ feature_selector["selectkbest"] = dict(
 # )
                                         
 selectkbest_score_func=dict(
-                            f_classif=f_classif,
+                            # f_classif=f_classif,
                             mutual_info_classif=mutual_info_classif,
                             # r_regression=r_regression
                             )

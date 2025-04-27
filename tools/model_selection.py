@@ -44,12 +44,12 @@ if __name__ == "__main__":
         # 'easyensemble',
         # 'balancedBagging',
         # 'rusboostclassifier',
-        # "gradientBoosting",
+        "gradientBoosting",
         # 'adaBoostClassifier',
         # "histGradientBoosting",
         # "catboost",
         # 'lgbm',
-        "xgboost",
+        # "xgboost",
     )
 
     current_time = datetime.now().strftime("%H-%M")
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     args.optuna_n_trials = 100
 
     # args.cv_n_iter = 200 # not used
-    args.scoring = ["f1",]  # ["f1", "average_precision", "precision", "recall"]
+    args.scoring = ["f1",'average_precision']  # ["f1", "average_precision", "precision", "recall"]
     args.cv_method = "optuna"  # optuna random
     args.cv_gap = int(19e3) #1051 * 5 * 2
     args.n_splits = 2  #
@@ -90,7 +90,7 @@ if __name__ == "__main__":
                                 'ProductCategory',
                                 'ProviderId',
                         ]
-    args.add_poly_interactions = True
+    args.add_poly_interactions = False
     args.poly_degree=1
     args.iterate_poly_cat_encoder_name=False 
     args.poly_iterate_cat_encoders = [
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     args.nlp_model_name = 'en_core_web_sm' # en-core-web-sm en_core_web_md
     args.cat_similarity_encode = None #['ProductCategory',] # None ProductCategory
 
-    args.n_clusters = 5 # maximum number to try for clustering clients
+    args.n_clusters = 0 # maximum number to try for clustering clients
     
 
     # ---
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     iterate_session_gap = False
     args.session_gap_minutes = 2448 #(np.linspace(12,48,6)*60).round().astype(int).tolist()
 
-    iterate_cat_method = True # if True, then args.cat_encoding_method is not used
+    iterate_cat_method = False # if True, then args.cat_encoding_method is not used
     args.cat_encoding_method = "woe"
     args.cat_encoding_methods = (
                                 # 'hashing',
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     
     # Dimensionality reduction
     args.do_pca = False  # try pca
-    args.do_feature_selection = False 
+    args.do_feature_selection = True 
     args.use_nystrom=False
     
     # cyclical features transformation

@@ -422,10 +422,10 @@ class Tuner(object):
 
 
         # feature selector:
-        # do_feature_selection = self.args.do_feature_selection
-        do_feature_selection = trial.suggest_categorical(
-            "select_features", [False, self.args.do_feature_selection]
-        )
+        do_feature_selection = self.args.do_feature_selection
+        # do_feature_selection = trial.suggest_categorical(
+        #     "select_features", [False, self.args.do_feature_selection]
+        # )
         selector_cfg = {}
         feature_selector_name = None
         k_score_func = None
