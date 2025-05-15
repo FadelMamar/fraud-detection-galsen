@@ -1,61 +1,62 @@
-# myproject
+# 🛡️ Financial Fraud Detection for Xente
 
-<a target="_blank" href="https://cookiecutter-data-science.drivendata.org/">
-    <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
-</a>
+This repository contains a machine learning solution for detecting **fraudulent financial transactions** in the context of the **Xente** e-commerce and financial services platform, which serves over 10,000 customers in Uganda.
 
-This is a data science project
+## 📊 Competition Overview
 
-## Project Organization
+**Xente** provided a dataset of \~140,000 anonymized transactions spanning from **15 November 2018 to 15 March 2019**. The goal of this project is to build a predictive model that accurately identifies **fraudulent activity**, thereby enhancing financial security and trust for Xente’s customers.
 
-```
-├── LICENSE            <- Open-source license if one is chosen
-├── Makefile           <- Makefile with convenience commands like `make data` or `make train`
-├── README.md          <- The top-level README for developers using this project.
-├── data
-│   ├── external       <- Data from third party sources.
-│   ├── interim        <- Intermediate data that has been transformed.
-│   ├── processed      <- The final, canonical data sets for modeling.
-│   └── raw            <- The original, immutable data dump.
-│
-├── docs               <- A default mkdocs project; see www.mkdocs.org for details
-│
-├── models             <- Trained and serialized models, model predictions, or model summaries
-│
-├── notebooks          <- Jupyter notebooks. Naming convention is a number (for ordering),
-│                         the creator's initials, and a short `-` delimited description, e.g.
-│                         `1.0-jqp-initial-data-exploration`.
-│
-├── pyproject.toml     <- Project configuration file with package metadata for 
-│                         package and configuration for tools like black
-│
-├── references         <- Data dictionaries, manuals, and all other explanatory materials.
-│
-├── reports            <- Generated analysis as HTML, PDF, LaTeX, etc.
-│   └── figures        <- Generated graphics and figures to be used in reporting
-│
-├── requirements.txt   <- The requirements file for reproducing the analysis environment, e.g.
-│                         generated with `pip freeze > requirements.txt`
-│
-├── setup.cfg          <- Configuration file for flake8
-│
-└── package   <- Source code for use in this project.
-    │
-    ├── __init__.py             <- Makes package a Python module
-    │
-    ├── config.py               <- Store useful variables and configuration
-    │
-    ├── dataset.py              <- Scripts to download or generate data
-    │
-    ├── features.py             <- Code to create features for modeling
-    │
-    ├── modeling                
-    │   ├── __init__.py 
-    │   ├── predict.py          <- Code to run model inference with trained models          
-    │   └── train.py            <- Code to train models
-    │
-    └── plots.py                <- Code to create visualizations
+Fraud detection is a high-impact application of machine learning, particularly in the fintech sector. An effective fraud detection model can minimize financial loss, reduce risk, and provide a safer digital experience for users.
+
+More info: https://zindi.africa/competitions/galsenais-fraud-detection-competition
+
+---
+
+## 🧠 Objective
+
+Build a robust machine learning model to classify whether a given transaction is **fraudulent** or **legitimate** based on the available features.
+
+---
+
+## 📁 Dataset Description
+
+The dataset includes:
+
+* Approximately **140,000** transaction records
+* Time window: **Nov 15, 2018 – Mar 15, 2019**
+* Labeled entries indicating whether a transaction was **fraudulent**
+* Various features related to transaction metadata and user behavior
+
+
+
+## 🧪 Key Components
+
+* 🔍 **EDA**: Analyzing class imbalance, transaction trends, and feature distributions
+* 🧹 **Preprocessing**: Handling missing values, feature encoding, scaling
+* 🧠 **Modeling**: Tree-based methods (e.g., XGBoost, Random Forest), Logistic Regression, and Neural Networks
+* 🧾 **Evaluation**: F1 Score to focus on rare class (fraudulent transactions)
+* 📉 **Imbalance Handling**: undersampling, class-weight tuning
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+* Python 3.10+
+
+```bash
+pip install -r requirements.txt
 ```
 
---------
+## 📈 Results
+
+The best-performing model achieved:
+
+* **F1-Score**: 74%
+
+
+## 🤝 Acknowledgments
+
+Thanks to **Xente** for providing the dataset and defining a high-impact problem in financial services.
 
