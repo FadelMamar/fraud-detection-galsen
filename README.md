@@ -43,10 +43,10 @@ The dataset includes:
 
 ### Prerequisites
 
-* Python 3.10+
+* Python 3.12
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ## 📈 Results
